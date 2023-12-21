@@ -32,18 +32,18 @@ class Actions(IntEnum):
     done = 6
 
 
-@struct.dataclass
-class State:
-    agent_pos: chex.Array
-    agent_dir: chex.Array
-    agent_dir_idx: chex.Array
-    agent_inv: chex.Array
-    goal_pos: chex.Array
-    pot_pos: chex.Array
-    wall_map: chex.Array
-    maze_map: chex.Array
-    time: int
-    terminal: bool
+# @struct.dataclass
+# class State:
+#     agent_pos: chex.Array
+#     agent_dir: chex.Array
+#     agent_dir_idx: chex.Array
+#     agent_inv: chex.Array
+#     goal_pos: chex.Array
+#     pot_pos: chex.Array
+#     wall_map: chex.Array
+#     maze_map: chex.Array
+#     time: int
+#     terminal: bool
 
 
 # Pot status indicated by an integer, which ranges from 23 to 0
@@ -55,11 +55,24 @@ MAX_ONIONS_IN_POT = 3 # A pot has at most 3 onions. A soup contains exactly 3 on
 URGENCY_CUTOFF = 40 # When this many time steps remain, the urgency layer is flipped on
 DELIVERY_REWARD = 20
 
+@struct.dataclass
+class State:
+    agent_pos_window: chex.Array
+    agent_dir_window: chex.Array
+    agent_dir_idx_window: chex.Array
+    agent_inv_window: chex.Array
+    goal_pos: chex.Array
+    pot_pos: chex.Array
+    wall_map: chex.Array
+    maze_map_window: chex.Array
+    time: int
+    terminal: bool
 
 class Overcooked(MultiAgentEnv):
     """Vanilla Overcooked"""
     def __init__(
             self,
+            window_size: int=2,
             layout = FrozenDict(layouts["cramped_room"]),
             random_reset: bool = False,
             max_steps: int = 400,
@@ -88,6 +101,7 @@ class Overcooked(MultiAgentEnv):
 
         self.random_reset = random_reset
         self.max_steps = max_steps
+        self.window_size = window_size
 
     def step_env(
             self,
@@ -214,22 +228,44 @@ class Overcooked(MultiAgentEnv):
         agent_inv = random_reset * random_agent_inv + \
                     (1-random_reset) * jnp.array([OBJECT_TO_INDEX['empty'], OBJECT_TO_INDEX['empty']])
 
+        # TODO: becomes n-dimensional based on window size n        
         state = State(
-            agent_pos=agent_pos,
-            agent_dir=agent_dir,
-            agent_dir_idx=agent_dir_idx,
-            agent_inv=agent_inv,
+            agent_pos_window=jnp.zeros((self.window_size,) +  agent_pos.shape),
+            agent_dir_window=jnp.zeros((self.window_size,) +  agent_dir.shape),
+            agent_dir_idx_window=jnp.zeros((self.window_size,) +  agent_dir_idx.shape),
+            agent_inv_window=jnp.zeros((self.window_size,) +  agent_inv.shape),
             goal_pos=goal_pos,
             pot_pos=pot_pos,
             wall_map=wall_map.astype(jnp.bool_),
-            maze_map=maze_map,
+            maze_map_window=jnp.zeros((self.window_size,) +  maze_map.shape),
             time=0,
             terminal=False,
         )
-
+        state = self.window_shift_and_replace(state, agent_pos, agent_dir, agent_dir_idx, agent_inv, maze_map)
+        import pdb; pdb.set_trace()
         obs = self.get_obs(state)
 
         return lax.stop_gradient(obs), lax.stop_gradient(state)
+    
+    def window_shift_and_replace(self, state: State, agent_pos, agent_dir, agent_dir_idx, agent_inv, maze_map):
+        # append the new timestep stuff onto the state
+        # if this yells at us, make new objects outside the state and then replace with equal dimensional things after slicing
+        # state.agent_pos_window.append(agent_pos)
+        # state.agent_dir_window.append(agent_dir)
+        # state.agent_dir_idx_window.append(agent_dir_idx)
+        # state.agent_inv_window.append(agent_inv)
+        # state.maze_map_window.append(maze_map)
+        # now slice
+        state.replace(
+            agent_pos_window=jnp.concatenate([state.agent_pos_window[1:], jnp.array([agent_pos])]),
+            agent_dir_idx_window=jnp.concatenate([state.agent_dir_idx_window[1:], jnp.array([agent_dir_idx])]),
+            agent_dir_window=jnp.concatenate([state.agent_dir_window[1:], jnp.array([agent_dir])]),
+            agent_inv_window=jnp.concatenate([state.agent_inv_window[1:], jnp.array([agent_inv])]),
+            maze_map_window=jnp.concatenate([state.maze_map_window[1:], jnp.array([maze_map])]),
+            terminal=False
+        )
+        import pdb; pdb.set_trace()
+        return state
 
     def get_obs(self, state: State) -> Dict[str, chex.Array]:
         """Return a full observation, of size (height x width x n_layers), where n_layers = 26.
@@ -276,17 +312,20 @@ class Overcooked(MultiAgentEnv):
         Urgency:
         25. Urgency. The entire layer is 1 there are 40 or fewer remaining time steps. 0 otherwise
         """
-
+        state_maze_map = state.maze_map_window[-1]
+        state_agent_pos = state.agent_pos_window[-1]
+        state_agent_inv = state.agent_inv_window[-1]
+        state_agent_dir_idx = state.agent_dir_idx_window[-1]
         width = self.obs_shape[0]
         height = self.obs_shape[1]
         n_channels = self.obs_shape[2]
-        padding = (state.maze_map.shape[0]-height) // 2
+        padding = (state_maze_map.shape[0]-height) // 2
 
-        maze_map = state.maze_map[padding:-padding, padding:-padding, 0]
+        maze_map = state_maze_map[padding:-padding, padding:-padding, 0]
         soup_loc = jnp.array(maze_map == OBJECT_TO_INDEX["dish"], dtype=jnp.uint8)
 
         pot_loc_layer = jnp.array(maze_map == OBJECT_TO_INDEX["pot"], dtype=jnp.uint8)
-        pot_status = state.maze_map[padding:-padding, padding:-padding, 2] * pot_loc_layer
+        pot_status = state_maze_map[padding:-padding, padding:-padding, 2] * pot_loc_layer
         onions_in_pot_layer = jnp.minimum(POT_EMPTY_STATUS - pot_status, MAX_ONIONS_IN_POT) * (pot_status >= POT_FULL_STATUS)    # 0/1/2/3, as long as not cooking or not done
         onions_in_soup_layer = jnp.minimum(POT_EMPTY_STATUS - pot_status, MAX_ONIONS_IN_POT) * (pot_status < POT_FULL_STATUS) \
                                * pot_loc_layer + MAX_ONIONS_IN_POT * soup_loc   # 0/3, as long as cooking or done
@@ -295,11 +334,12 @@ class Overcooked(MultiAgentEnv):
         urgency_layer = jnp.ones(maze_map.shape, dtype=jnp.uint8) * ((self.max_steps - state.time) < URGENCY_CUTOFF)
 
         agent_pos_layers = jnp.zeros((2, height, width), dtype=jnp.uint8)
-        agent_pos_layers = agent_pos_layers.at[0, state.agent_pos[0, 1], state.agent_pos[0, 0]].set(1)
-        agent_pos_layers = agent_pos_layers.at[1, state.agent_pos[1, 1], state.agent_pos[1, 0]].set(1)
+        import pdb; pdb.set_trace()
+        agent_pos_layers = agent_pos_layers.at[0, state_agent_pos[0, 1], state_agent_pos[0, 0]].set(1)
+        agent_pos_layers = agent_pos_layers.at[1, state_agent_pos[1, 1], state_agent_pos[1, 0]].set(1)
 
         # Add agent inv: This works because loose items and agent cannot overlap
-        agent_inv_items = jnp.expand_dims(state.agent_inv,(1,2)) * agent_pos_layers
+        agent_inv_items = jnp.expand_dims(state_agent_inv,(1,2)) * agent_pos_layers
         maze_map = jnp.where(jnp.sum(agent_pos_layers,0), agent_inv_items.sum(0), maze_map)
         soup_ready_layer = soup_ready_layer \
                            + (jnp.sum(agent_inv_items,0) == OBJECT_TO_INDEX["dish"]) * jnp.sum(agent_pos_layers,0)
@@ -327,7 +367,7 @@ class Overcooked(MultiAgentEnv):
 
         # Agent related layers
         agent_direction_layers = jnp.zeros((8, height, width), dtype=jnp.uint8)
-        dir_layer_idx = state.agent_dir_idx+jnp.array([0,4])
+        dir_layer_idx = state_agent_dir_idx+jnp.array([0,4])
         agent_direction_layers = agent_direction_layers.at[dir_layer_idx,:,:].set(agent_pos_layers)
 
         # Both agent see their layers first, then the other layer
@@ -483,13 +523,8 @@ class Overcooked(MultiAgentEnv):
         reward = alice_reward + bob_reward
 
         return (
-            state.replace(
-                agent_pos=agent_pos,
-                agent_dir_idx=agent_dir_idx,
-                agent_dir=agent_dir,
-                agent_inv=agent_inv,
-                maze_map=maze_map,
-                terminal=False),
+            # TODO: change this to n dimensional window
+            self.window_shift_and_replace(state, agent_pos, agent_dir, agent_dir_idx, agent_inv, maze_map),
             reward
         )
 
