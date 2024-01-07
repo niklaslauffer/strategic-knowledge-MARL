@@ -16,7 +16,7 @@ from .mpe import (
 )
 from .smax import SMAX, HeuristicEnemySMAX, LearnedPolicyEnemySMAX
 from .switch_riddle import SwitchRiddle
-from .overcooked import Overcooked, overcooked_layouts
+from .overcooked import Overcooked, OvercookedSlidingWindow, overcooked_layouts
 from .mabrax import Ant, Humanoid, Hopper, Walker2d, HalfCheetah
 from .hanabi import HanabiGame
 from .storm import InTheGrid, InTheGrid_2p
