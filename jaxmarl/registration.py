@@ -25,6 +25,7 @@ from .environments import (
     InTheGrid_2p,
     HanabiGame,
     Overcooked,
+    OvercookedSlidingWindow,
     CoinGame,
 )
 
@@ -101,6 +102,8 @@ def make(env_id: str, **env_kwargs):
     # 7. Overcooked
     elif env_id == "overcooked":
         env = Overcooked(**env_kwargs)
+    elif env_id == "overcooked_sliding_window":
+        env = OvercookedSlidingWindow(**env_kwargs)
 
     # 8. Coin Game
     elif env_id == "coin_game":
@@ -135,5 +138,6 @@ registered_envs = [
     "storm_2p",
     "hanabi",
     "overcooked",
+    "overcooked_sliding_window",
     "coin_game",
 ]

@@ -1,24 +1,23 @@
 from collections import OrderedDict
 from enum import IntEnum
+from typing import Dict, Tuple
 
-import numpy as np
+import chex
 import jax
 import jax.numpy as jnp
-from jax import lax
-from jaxmarl.environments import MultiAgentEnv
-from jaxmarl.environments import spaces
-from typing import Tuple, Dict
-import chex
+import numpy as np
+from chex._src.pytypes import Array
 from flax import struct
 from flax.core.frozen_dict import FrozenDict
+from jax import lax
 
-from jaxmarl.environments.overcooked.common import (
-    OBJECT_TO_INDEX,
-    COLOR_TO_INDEX,
-    OBJECT_INDEX_TO_VEC,
-    DIR_TO_VEC,
-    make_overcooked_map)
-from jaxmarl.environments.overcooked.layouts import overcooked_layouts as layouts
+from jaxmarl.environments import MultiAgentEnv, spaces
+from jaxmarl.environments.overcooked.common import (COLOR_TO_INDEX, DIR_TO_VEC,
+                                                    OBJECT_INDEX_TO_VEC,
+                                                    OBJECT_TO_INDEX,
+                                                    make_overcooked_map)
+from jaxmarl.environments.overcooked.layouts import \
+    overcooked_layouts as layouts
 
 
 class Actions(IntEnum):
@@ -637,3 +636,73 @@ class Overcooked(MultiAgentEnv):
 
     def max_steps(self) -> int:
         return self.max_steps
+
+
+class OvercookedSlidingWindow(Overcooked):
+    
+    def __init__(self, layout=FrozenDict(layouts["cramped_room"]), random_reset: bool = False, max_steps: int = 400, window_size: int = 2):
+        super().__init__(layout, random_reset, max_steps)
+        self.window_size = window_size
+    
+    def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], State]:
+        obs, state = super().reset(key)
+        dummy_state = State(
+            agent_pos=state.agent_pos * 0,
+            agent_dir=state.agent_dir * 0,
+            agent_dir_idx=state.agent_dir_idx * 0,
+            agent_inv=state.agent_inv * 0,
+            goal_pos=state.goal_pos * 0,
+            pot_pos=state.pot_pos * 0,
+            wall_map=state.wall_map.astype(jnp.bool_),
+            maze_map=state.maze_map,
+            time=0,
+            terminal=False,
+        )
+        window = [dummy_state] * self.window_size
+        window[-1] = state
+        # window[0].goal_pos = window[0].goal_pos * 0
+        # still haven't made a dummy obs
+        return obs, window  # obs needs to be a zeros and window needs to be zeros except for the most recent entry
+    
+    # def step_env(self, key: chex.PRNGKey, state: State, actions: Dict[str, Array]) -> Tuple[Dict[str, Array], State, Dict[str, float], Dict[str, bool], Dict]:
+    #     obs, state, rewards, dones, info = super().step_env(key, state, actions)
+    #     current_obs = self.window.pop(0)
+    #     self.window.append(obs)
+    #     return current_obs, state, rewards, dones, info 
+    
+    def step(self,         
+        key: chex.PRNGKey,
+        state: list,
+        actions: Dict[str, chex.Array],
+    ) -> Tuple[Dict[str, chex.Array], State, Dict[str, float], Dict[str, bool], Dict]:
+        """Performs step transitions in the environment."""
+
+        ## NOTE: state is a window
+        assert type(state) == list
+        state_window = state
+        state = state_window[-1]
+
+        key, key_reset = jax.random.split(key)
+        obs_st, states_st, rewards, dones, infos = self.step_env(key, state, actions)
+
+        obs_re, states_re = self.reset(key_reset)
+        state_re = states_re[-1]
+
+        # Auto-reset environment based on termination
+        states = jax.tree_map(
+            lambda x, y: jax.lax.select(dones["__all__"], x, y), state_re, states_st
+        )
+        obs = jax.tree_map(
+            lambda x, y: jax.lax.select(dones["__all__"], x, y), obs_re, obs_st
+        )
+        
+        state_window.pop(0)
+        state_window.append(states)
+
+        return obs, state_window, rewards, dones, infos
+
+    # def get_obs(self, state: State) -> Dict[str, Array]:
+    #     ## NOTE: state is a window
+    #     assert type(state) == list
+
+    #     return super().get_obs(state[0])

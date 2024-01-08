@@ -18,7 +18,6 @@ class State:
     done: chex.Array
     step: int
 
-
 class MultiAgentEnv(object):
     """Jittable abstract base class for all jaxmarl Environments."""
 
@@ -164,4 +163,22 @@ class OverridePlayer(MultiAgentEnv):
     @property
     def agent_classes(self) -> dict:
         return self.baseEnv.agent_classes()
-
+    
+class MultiAgentSlidingWindowEnv(MultiAgentEnv):
+    
+    def __init__(self, num_agents: int, window_size: int = 1) -> None:
+        super().__init__(num_agents)
+        self.window_size = window_size
+    
+    def window_reset(self, obs):
+        return [obs] * self.window_size
+    
+    @partial(jax.jit, static_argnums=(0,))
+    def step(
+        self,
+        key: chex.PRNGKey,
+        state: State,
+        actions: Dict[str, chex.Array],
+    ) -> Tuple[Dict[str, chex.Array], State, Dict[str, float], Dict[str, bool], Dict]:
+        """Performs step transitions in the environment."""
+        obs, states, rewards, dones, infos = super().step(key, state, actions)
