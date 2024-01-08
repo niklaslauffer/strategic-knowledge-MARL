@@ -94,7 +94,8 @@ def get_rollout(train_state, config):
     override_map = {env.agents[0] : policy_fn}
     env = OverridePlayer(env, override_map)
 
-    network = ActorCritic(env.action_space().n, activation=config["ACTIVATION"])
+    action_space_size = env.action_space().n
+    network = ActorCritic(action_space_size, activation=config["ACTIVATION"])
     key = jax.random.PRNGKey(0)
     key, key_r, key_a = jax.random.split(key, 3)
 
@@ -133,9 +134,16 @@ def batchify(x: dict, agent_list, num_actors):
     x = jnp.stack([x[a] for a in agent_list])
     return x.reshape((num_actors, -1))
 
+# def vbatchify(x: dict, agent_list, _dim):
+#     x = jnp.stack([x[a] for a in agent_list])
+#     return x.reshape((*_dim, -1))
 
 def unbatchify(x: jnp.ndarray, agent_list, num_envs, num_actors):
     x = x.reshape((num_actors, num_envs, -1))
+    return {a: x[i] for i, a in enumerate(agent_list)}
+
+def unbatchifyp(x: jnp.ndarray, agent_list, *env_dim, num_actors):
+    x = x.reshape((num_actors, *env_dim, -1))
     return {a: x[i] for i, a in enumerate(agent_list)}
 
 def make_train(config):
@@ -188,8 +196,9 @@ def make_train(config):
 
     # override_map = {env.agents[0] : policy_fn}
     # env = OverridePlayer(env, override_map)
-
-    config["NUM_ACTORS"] = env.num_agents * config["NUM_ENVS"]
+    
+    config['NUM_COPOLICIES'] = config['NUM_PARTICLES']
+    config["NUM_ACTORS"] = env.num_agents * config["NUM_ENVS"] * config['NUM_COPOLICIES'] * config["NUM_PARTICLES"]
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"] 
     )
@@ -207,12 +216,13 @@ def make_train(config):
 
         # INIT NETWORK
         network = ActorCritic(env.action_space().n, activation=config["ACTIVATION"])
-        rng, _rng = jax.random.split(rng)
         init_x = jnp.zeros(env.observation_space().shape)
         
         init_x = init_x.flatten()
-        
-        network_params = network.init(_rng, init_x)
+
+        rng, _rng = jax.random.split(rng)
+        particle_rng = jax.random.split(_rng, config["NUM_PARTICLES"])
+        network_params_n = jax.vmap(network.init, in_axes=(0,None))(particle_rng, init_x)
         if config["ANNEAL_LR"]:
             tx = optax.chain(
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
@@ -220,16 +230,16 @@ def make_train(config):
             )
         else:
             tx = optax.chain(optax.clip_by_global_norm(config["MAX_GRAD_NORM"]), optax.adam(config["LR"], eps=1e-5))
-        train_state = TrainState.create(
-            apply_fn=network.apply,
-            params=network_params,
-            tx=tx,
-        )
+        train_state_n = jax.vmap(lambda a,b,c : TrainState.create(
+            apply_fn=a,
+            params=b,
+            tx=c,
+        ), in_axes=(None,0,None,None))(network.apply,network_params_n,tx)
         
         # INIT ENV
         rng, _rng = jax.random.split(rng)
-        reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
-        obsv, env_state = jax.vmap(env.reset, in_axes=(0,))(reset_rng)
+        reset_rng = jax.random.split(_rng, (config["NUM_PARTICLES"], config["NUM_ENVS"]))
+        obsv_n, env_state_n = jax.vmap(env.reset, in_axes=(0,))(reset_rng)
         
         # TRAIN LOOP
         def _update_step(runner_state, unused):
@@ -237,9 +247,10 @@ def make_train(config):
             train_state, env_state, obsv, rng = runner_state
 
             rng, _rng = jax.random.split(rng)
-            env = sample_overridden_env(_rng, base_env)
-            env = base_env
-            env = LogWrapper(env)
+            copolicy_rng = jax.random.split(_rng, config["NUM_COPOLICIES"])
+            envs = jax.vmap(sample_overridden_env, in_axes=(0,None))(copolicy_rng, base_env)
+            envs = jax.vmap(LogWrapper, in_axes=(0,))(envs)
+            env = env[0]
             
             # rng, _rng = jax.random.split(rng)
             # reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
@@ -259,16 +270,23 @@ def make_train(config):
                 pi, value = network.apply(train_state.params, obs_batch)
                 action = pi.sample(seed=_rng)
                 log_prob = pi.log_prob(action)
-                env_act = unbatchify(action, env.agents, config["NUM_ENVS"], env.num_agents)
+                env_act = unbatchifyp(action, env.agents, (config["NUM_PARTICLES"], config['NUM_COPOLICIES'], config["NUM_ENVS"]), env.num_agents)
                 
                 env_act = {k:v.flatten() for k,v in env_act.items()}
                 
                 # STEP ENV
                 rng, _rng = jax.random.split(rng)
-                rng_step = jax.random.split(_rng, config["NUM_ENVS"])
+                rng_step = jax.random.split(_rng, (config["NUM_PARTICLES"], config['NUM_COPOLICIES'], config["NUM_ENVS"]))
                 
-                obsv, env_state, reward, done, info = jax.vmap(env.step, in_axes=(0,0,0))(
-                    rng_step, env_state, env_act
+                def step_copolicy_k(k, *args):
+                    return envs[k].step(*args)
+                copolicy_idxs = jnp.expand_dims(jnp.arange(0,config['NUM_COPOLICIES']), axis=(0,2))
+                copolicy_idxs = np.broadcast_to(
+                    jnp.arange(0,config['NUM_COPOLICIES'])[np.newaxis, :, np.newaxis], \
+                    shape=(config["NUM_PARTICLES"], config['NUM_COPOLICIES'], config["NUM_ENVS"])
+                )
+                obsv, env_state, reward, done, info = jax.vmap(step_copolicy_k, in_axes=(0,0,0,0))(
+                    copolicy_idxs, rng_step, env_state, env_act
                 )
                 info = jax.tree_map(lambda x: x.reshape((config["NUM_ACTORS"])), info)
                 transition = Transition(
@@ -284,10 +302,21 @@ def make_train(config):
                 runner_state = (train_state, env_state, obsv, rng)
                 return runner_state, transition
 
+            # jax.vmap(jax.lax.scan, in_axes=(None,0,None,None))(_env_step, runner_state, None, config["NUM_STEPS"])
             runner_state, traj_batch = jax.lax.scan(
                 _env_step, runner_state, None, config["NUM_STEPS"]
             )
             # jax.debug.print('{}',traj_batch.info["returned_episode_returns"])
+
+            
+
+            traj = traj_batch.reshape((env.num_agents, config["NUM_PARTICLES"], config['NUM_COPOLICIES'], config["NUM_ENVS"]))
+            avg_returns = traj.info["returned_episode_returns"].mean(axis=-1).squeeze()
+            argmax_idx = jnp.zeros(k)
+            for k in range(config["NUM_PARTICLES"]):
+                max_idx = jnp.argmax(avg_returns[k])
+                argmax_idx[k] = max_idx
+                avg_returns = jnp.delete(avg_returns, k, axis=0)
             
             # CALCULATE ADVANTAGE
             train_state, env_state, last_obs, rng = runner_state
@@ -408,7 +437,7 @@ def make_train(config):
             return runner_state, metric
 
         rng, _rng = jax.random.split(rng)
-        runner_state = (train_state, env_state, obsv, _rng)
+        runner_state = (train_state_n, env_state_n, obsv_n, _rng)
         runner_state, metric = jax.lax.scan(
             _update_step, runner_state, None, config["NUM_UPDATES"]
         )
