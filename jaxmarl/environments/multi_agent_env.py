@@ -178,7 +178,10 @@ class DelayedObsWrapper(MultiAgentEnv):
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], StateWindowObs]:
         obs, state = self.baseEnv.reset(key)
-        obs_window = [jnp.zeros_like(obs)] * self.window_size - 1 + [obs]
+        dummy_obs = {}
+        for agent, observ in obs.items():
+            dummy_obs[agent] = jnp.zeros_like(observ)
+        obs_window = [dummy_obs] * (self.window_size - 1) + [obs]
         state = StateWindowObs(state, obs_window)
         return obs_window[0], state
 
@@ -186,10 +189,12 @@ class DelayedObsWrapper(MultiAgentEnv):
         self, key: chex.PRNGKey, state_window_obs: State, actions: Dict[str, chex.Array]
     ) -> Tuple[Dict[str, chex.Array], State, Dict[str, float], Dict[str, bool], Dict]:
         """Environment-specific step transition."""
+        # import pdb; pdb.set_trace()
+
         obs_st, states_st, rewards, dones, infos = self.baseEnv.step(key, state_window_obs.state, actions)
-        curr_obs = state_window_obs.obs_window[0]
         new_obs_window = state_window_obs.obs_window[1:] + [obs_st]
         new_state_window_obs = StateWindowObs(states_st, new_obs_window)
+        curr_obs = new_state_window_obs.obs_window[0]
         return curr_obs, new_state_window_obs, rewards, dones, infos
 
     def observation_space(self, agent: str=''):
