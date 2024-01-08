@@ -4,13 +4,13 @@ Based on the Gymnax and PettingZoo APIs
 
 """
 
+from functools import partial
+from typing import Dict, List, Optional, Tuple
+
+import chex
 import jax
 import jax.numpy as jnp
-from typing import Dict
-import chex
-from functools import partial
 from flax import struct
-from typing import Tuple, Optional
 
 
 @struct.dataclass
@@ -164,21 +164,47 @@ class OverridePlayer(MultiAgentEnv):
     def agent_classes(self) -> dict:
         return self.baseEnv.agent_classes()
     
-class MultiAgentSlidingWindowEnv(MultiAgentEnv):
+@struct.dataclass
+class StateWindowObs:
+    state: State
+    obs_window: List[chex.Array]
+
+class DelayedObsWrapper(MultiAgentEnv):
     
-    def __init__(self, num_agents: int, window_size: int = 1) -> None:
-        super().__init__(num_agents)
-        self.window_size = window_size
-    
-    def window_reset(self, obs):
-        return [obs] * self.window_size
-    
+    def __init__(self, baseEnv, delay):
+        self.baseEnv = baseEnv
+        self.window_size = delay
+
     @partial(jax.jit, static_argnums=(0,))
-    def step(
-        self,
-        key: chex.PRNGKey,
-        state: State,
-        actions: Dict[str, chex.Array],
+    def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], StateWindowObs]:
+        obs, state = self.baseEnv.reset(key)
+        obs_window = [jnp.zeros_like(obs)] * self.window_size - 1 + [obs]
+        state = StateWindowObs(state, obs_window)
+        return obs_window[0], state
+
+    def step_env(
+        self, key: chex.PRNGKey, state_window_obs: State, actions: Dict[str, chex.Array]
     ) -> Tuple[Dict[str, chex.Array], State, Dict[str, float], Dict[str, bool], Dict]:
-        """Performs step transitions in the environment."""
-        obs, states, rewards, dones, infos = super().step(key, state, actions)
+        """Environment-specific step transition."""
+        obs_st, states_st, rewards, dones, infos = self.baseEnv.step(key, state_window_obs.state, actions)
+        curr_obs = state_window_obs.obs_window[0]
+        new_obs_window = state_window_obs.obs_window[1:] + [obs_st]
+        new_state_window_obs = StateWindowObs(states_st, new_obs_window)
+        return curr_obs, new_state_window_obs, rewards, dones, infos
+
+    def observation_space(self, agent: str=''):
+        """Observation space for a given agent."""
+        return self.baseEnv.observation_space()
+
+    def action_space(self, agent: str=''):
+        """Action space for a given agent."""
+        return self.baseEnv.action_space(agent)
+
+    @property
+    def name(self) -> str:
+        """Environment name."""
+        return type(self).__name__
+
+    @property
+    def agent_classes(self) -> dict:
+        return self.baseEnv.agent_classes()
