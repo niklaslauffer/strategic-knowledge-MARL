@@ -339,6 +339,7 @@ def make_train(config):
 @hydra.main(version_base=None, config_path="config", config_name="ippo_ff_overcooked")
 def main(config):
     config = OmegaConf.to_container(config) 
+    layout_name = config["ENV_KWARGS"]["layout"]
     config["ENV_KWARGS"]["layout"] = overcooked_layouts[config["ENV_KWARGS"]["layout"]]
 
     num_samples = 50
@@ -348,7 +349,7 @@ def main(config):
         train_vjit = jax.jit(jax.vmap(make_train(config), out_axes=0))
         outs = train_vjit(rng_trains)
 
-    filename = f'{config["ENV_NAME"]}_cramped_room_new'
+    filename = f'{config["ENV_NAME"]}_{layout_name}_save'
 
     for i in range(num_samples):
         plt.plot(outs["metrics"]["returned_episode_returns"][i].mean(-1).reshape(-1))
