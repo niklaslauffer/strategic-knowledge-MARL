@@ -87,6 +87,7 @@ class LogWrapper(JaxMARLWrapper):
         info["returned_episode_returns"] = state.returned_episode_returns
         info["returned_episode_lengths"] = state.returned_episode_lengths
         info["returned_episode"] = jnp.full((self._env.num_agents,), ep_done)
+        print(state.returned_episode_lengths.shape)
         return obs, state, reward, done, info
 
 class LogWrapperCoPolicy(LogWrapper):
