@@ -17,6 +17,7 @@ from jaxmarl.wrappers.baselines import LogWrapperCoPolicy
 from jaxmarl.environments.overcooked import overcooked_layouts
 from jaxmarl.environments.multi_agent_env import OverridePlayer, OverridePlayer2
 from jaxmarl.viz.overcooked_visualizer import OvercookedVisualizer
+from jaxmarl.viz.normal_form_visualizer import animate_triangle
 import hydra
 from omegaconf import OmegaConf
 
@@ -69,6 +70,7 @@ class Transition(NamedTuple):
     log_prob: jnp.ndarray
     obs: jnp.ndarray
     info: jnp.ndarray
+    action_probs: jnp.ndarray
 
 def get_rollout(train_state, config):
     env = jaxmarl.make(config["ENV_NAME"], **config["ENV_KWARGS"])
@@ -145,13 +147,18 @@ def unbatchify(x: jnp.ndarray, agent_list, num_envs, num_actors):
 def unbatchifyp(x: jnp.ndarray, agent_list, env_dim, num_actors):
     x = x.reshape((num_actors, *env_dim, -1))
     return {a: x[i] for i, a in enumerate(agent_list)}
-
+   
 def make_train(config):
     base_env = jaxmarl.make(config["ENV_NAME"], **config["ENV_KWARGS"])
 
 
     num_samples = 50
-    filename = f'{config["ENV_NAME"]}_{config["LAYOUT_NAME"]}_save'
+    # load_payoffs = jnp.array([
+    #     [2,-1],
+    #     [-1,1]
+    # ])
+    load_payoffs = config['ENV_KWARGS']['payoffs']
+    filename = f'{config["ENV_NAME"]}_{load_payoffs}_save'
     load_params_batch = pickle.load(open(f'{filename}_params{num_samples}.pkl', "rb"))
     get_ith_params = lambda i : jax.tree_util.tree_map(lambda x : x[i], load_params_batch)
 
@@ -292,6 +299,7 @@ def make_train(config):
                 action = action.flatten()
                 log_prob = log_prob.flatten()
                 value = value.flatten()
+                action_probs = pi.probs.reshape((config["NUM_PARTICLES"]*config['NUM_COPOLICIES']*config["NUM_ENVS"], -1))
                 obs_batch = obs_batch.reshape((config["NUM_PARTICLES"]*config['NUM_COPOLICIES']*config["NUM_ENVS"], -1))
                 
                 env_act = unbatchifyp(action, env.agents, (config["NUM_PARTICLES"], config['NUM_COPOLICIES'], config["NUM_ENVS"]), env.num_agents)
@@ -328,6 +336,7 @@ def make_train(config):
                 obsv, env_state, reward, done, info = jax.vmap(env.step_copolicy, in_axes=(0,0,0,0))(
                     rng_step, env_state, env_act, co_params_reshaped
                 )
+                # info['action_probs'] = action_probs
                 info = jax.tree_map(lambda x: x.reshape((config["NUM_ACTORS"])), info)
                 transition = Transition(
                     batchify(done, env.agents, config["NUM_ACTORS"]).squeeze(),
@@ -336,34 +345,55 @@ def make_train(config):
                     batchify(reward, env.agents, config["NUM_ACTORS"]).squeeze(),
                     log_prob,
                     obs_batch,
-                    info
+                    info,
+                    action_probs
                     
                 )
                 runner_state = (train_state, env_state, obsv, rng)
                 return runner_state, transition
 
-            # jax.vmap(jax.lax.scan, in_axes=(None,0,None,None))(_env_step, runner_state, None, config["NUM_STEPS"])
             runner_state, traj_batch = jax.lax.scan(
                 _env_step, runner_state, None, config["NUM_STEPS"]
             )
-            # jax.debug.print('{}',traj_batch.info["returned_episode_returns"])
+
 
             traj_returns = traj_batch.info["returned_episode_returns"].reshape((config["NUM_STEPS"], config["NUM_PARTICLES"], config['NUM_COPOLICIES'], config["NUM_ENVS"]))
             avg_returns = traj_returns.mean(axis=-1).mean(axis=0) # TODO add in discount to average reward
             grad_mask = jnp.zeros((config["NUM_STEPS"], config["NUM_PARTICLES"], config['NUM_COPOLICIES'], config["NUM_ENVS"]))
-            # argmax_idx = jnp.zeros(config["NUM_COPOLICIES"])
-            for k in range(config["NUM_COPOLICIES"]):
-                max_idx = jnp.argmax(avg_returns[:,k])
-                # argmax_idx = argmax_idx.at[k].set(max_idx)
-                grad_mask = grad_mask.at[:,max_idx,k,:].set(1)
-                avg_returns = avg_returns.at[max_idx,:].set(jnp.ones(config["NUM_COPOLICIES"]) * -jnp.inf)
-                # avg_returns = jnp.delete(avg_returns, np.array([argmax_idx]), axis=0, assume_unique_indices=0)
+
+            if config['MATCHING'] == "single":
+                for k in range(config["NUM_COPOLICIES"]):
+                    max_idx = jnp.argmax(avg_returns[:,k])
+                    grad_mask = grad_mask.at[:,max_idx,k,:].set(1)
+                    avg_returns = avg_returns.at[max_idx,:].set(jnp.ones(config["NUM_COPOLICIES"]) * -jnp.inf)
+            elif config['MATCHING'] == "multi_averaged":
+                for k in range(config["NUM_COPOLICIES"]):
+                    max_idx = jnp.argmax(avg_returns[:,k])
+                    grad_mask = grad_mask.at[:,max_idx,k,:].set(1)
+
+                grad_mask_sum = jnp.expand_dims(jnp.sum(grad_mask, axis=2), axis=2)
+                # avoid divide by zeros
+                grad_mask = jnp.where(grad_mask_sum==0, 0, jnp.divide(grad_mask, grad_mask_sum))
+            elif config['MATCHING'] == "multi_scaled":
+                avg_returns = avg_returns - jnp.min(avg_returns, axis=1, keepdims=True)
+                # avg_returns = avg_returns / jnp.max(avg_returns, axis=1, keepdims=True)
+                avg_returns = avg_returns / jnp.sum(avg_returns, axis=1, keepdims=True)
+                avg_returns = jnp.nan_to_num(avg_returns, nan=0.5)
+                jax.debug.print("after {x}", x=avg_returns)
+                for k in range(config["NUM_COPOLICIES"]):
+                    max_idx = jnp.argmax(avg_returns[:,k])
+                    grad_mask = grad_mask.at[:,max_idx,k,:].set(1)
+
+                grad_mask_sum = jnp.sum(grad_mask, axis=2, keepdims=True)
+                # avoid divide by zeros
+                grad_mask = jnp.where(grad_mask_sum==0, 0, jnp.divide(grad_mask, grad_mask_sum))
+
+            # jax.debug.print("{x}", x=grad_mask[0,:,:,0])
             grad_mask = grad_mask.reshape((config["NUM_STEPS"], -1))
+
 
             # CALCULATE ADVANTAGE
             train_state, env_state, last_obs, rng = runner_state
-            # last_obs_batch = batchify(last_obs, env.agents, config["NUM_ACTORS"])
-            # _, last_val = network.apply(train_state.params, last_obs_batch)
 
             last_obs_batch = jnp.stack([last_obs[a] for a in env.agents])
             last_obs_batch = last_obs_batch.reshape((config["NUM_PARTICLES"], config['NUM_COPOLICIES']*config["NUM_ENVS"], -1))                
@@ -478,7 +508,6 @@ def make_train(config):
                 shuffled_batch = jax.tree_util.tree_map(
                     lambda x: jnp.take(x, permutation, axis=1), batch
                 )
-                print(shuffled_batch[1].shape)
                 minibatches = jax.tree_util.tree_map(
                     lambda x: jnp.reshape(
                         x, (config['NUM_PARTICLES'], config["NUM_MINIBATCHES"], -1) + tuple(x.shape[2:])
@@ -504,10 +533,12 @@ def make_train(config):
                 _update_epoch, update_state, None, config["UPDATE_EPOCHS"]
             )
             train_state = update_state[0]
-
             metric = jax.tree_util.tree_map(
                     lambda x : x.reshape((config["NUM_STEPS"], config["NUM_PARTICLES"], config['NUM_COPOLICIES']*config["NUM_ENVS"]) + x.shape[2:]), traj_batch.info
                 )
+            metric['grad_mask'] = grad_mask
+            metric['actions'] = traj_batch.action
+            metric['action_probs'] = traj_batch.action_probs
             rng = update_state[-1]
             
             runner_state = (train_state, env_state, last_obs, rng)
@@ -524,37 +555,44 @@ def make_train(config):
 
 
 
-@hydra.main(version_base=None, config_path="config", config_name="mer_ff_overcooked")
+@hydra.main(version_base=None, config_path="config", config_name="mer_ff_normal")
 def main(config):
+    np.set_printoptions(threshold=np.inf)
     # idea: do a warm start so that all policies gain basic competency level
     config = OmegaConf.to_container(config) 
-    layout_name = config["ENV_KWARGS"]["layout"]
-    config['LAYOUT_NAME'] = layout_name
-    config["ENV_KWARGS"]["layout"] = overcooked_layouts[config["ENV_KWARGS"]["layout"]]
+    payoffs = jnp.array([
+        [2,-1,-1],
+        [-1,1,1],
+        [-1,1,1]
+    ])
+    config["ENV_KWARGS"]["payoffs"] = payoffs
     rng = jax.random.PRNGKey(30)
     with jax.disable_jit(False):
         train_jit = jax.jit(make_train(config))
         out = train_jit(rng)
 
-    filename = f'{config["ENV_NAME"]}_{layout_name}_mer'
+    filename = f'{config["ENV_NAME"]}_{payoffs}_mer'
+    
+    grad_mask = out["metrics"]["grad_mask"].reshape(out["metrics"]["returned_episode_returns"].shape)
+    masked_returns = out["metrics"]["returned_episode_returns"].at[grad_mask==0.0].set(np.nan)
+    mean_returns = jnp.nanmean(masked_returns, axis=-1).reshape(-1, config['NUM_PARTICLES'])
 
-    print(out["metrics"]["returned_episode_returns"].shape)
-    print(out["metrics"]["returned_episode_returns"].mean(-1).shape)
-    print(out["metrics"]["returned_episode_returns"].mean(-1).reshape(-1).shape)
-    lines = jnp.swapaxes(out["metrics"]["returned_episode_returns"].mean(-1).reshape(-1, config['NUM_PARTICLES']), 0, 1)
+    lines = jnp.swapaxes(mean_returns, 0, 1)
     for l in lines:
-        plt.plot(l)
+        plt.scatter(jnp.arange(len(l)), l)
+        # print(l)
     plt.xlabel("Update Step")
     plt.ylabel("Return")
     plt.savefig(f'{filename}.png')
 
-    # train_state = out["runner_state"][0]
-    # v_state_obs_seq = jax.vmap(get_rollout, in_axes=(0,None))(train_state, config)
-    # viz = OvercookedVisualizer()
-    # # agent_view_size is hardcoded as it determines the padding around the layout.
-    # for i in range(config['NUM_PARTICLES']):
-    #     state_seq = [s.state[i] for s in v_state_obs_seq]
-    #     viz.animate(state_seq, agent_view_size=5, filename=f"{filename}_particle{i}.gif")
+    pi = out["metrics"]["action_probs"]
+    pi = pi.reshape(pi.shape[:2] + (config["NUM_PARTICLES"], config['NUM_COPOLICIES'],config["NUM_ENVS"], -1))
+    action_seq = pi[:,0,:,0,0,:]
+
+    point_colors = ['green', 'red']
+    point_markers = ['o', 'o']
+
+    animate_triangle(action_seq, point_colors, point_markers, save_gif=f'{filename}.gif')
 
 
 if __name__ == "__main__":

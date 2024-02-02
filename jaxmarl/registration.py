@@ -27,6 +27,7 @@ from .environments import (
     Overcooked,
     OvercookedSlidingWindow,
     CoinGame,
+    NormalForm
 )
 
 
@@ -109,6 +110,10 @@ def make(env_id: str, **env_kwargs):
     elif env_id == "coin_game":
         env = CoinGame(**env_kwargs)
 
+    # 8. Coin Game
+    elif env_id == "normal_form":
+        env = NormalForm(**env_kwargs)
+
     return env
 
 registered_envs = [
@@ -140,4 +145,5 @@ registered_envs = [
     "overcooked",
     "overcooked_sliding_window",
     "coin_game",
+    "normal_form"
 ]

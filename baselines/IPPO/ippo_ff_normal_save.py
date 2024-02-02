@@ -14,8 +14,6 @@ import distrax
 from gymnax.wrappers.purerl import LogWrapper, FlattenObservationWrapper
 import jaxmarl
 from jaxmarl.wrappers.baselines import LogWrapper
-from jaxmarl.environments.overcooked import overcooked_layouts
-from jaxmarl.viz.overcooked_visualizer import OvercookedVisualizer
 import hydra
 from omegaconf import OmegaConf
 
@@ -173,6 +171,7 @@ def make_train(config):
                 # SELECT ACTION
                 rng, _rng = jax.random.split(rng)
 
+                print(env.agents)
                 obs_batch = batchify(last_obs, env.agents, config["NUM_ACTORS"])
                 
                 pi, value = network.apply(train_state.params, obs_batch)
@@ -185,10 +184,11 @@ def make_train(config):
                 # STEP ENV
                 rng, _rng = jax.random.split(rng)
                 rng_step = jax.random.split(_rng, config["NUM_ENVS"])
-                
+                print(env_act['agent_0'].shape)
                 obsv, env_state, reward, done, info = jax.vmap(env.step, in_axes=(0,0,0))(
                     rng_step, env_state, env_act
                 )
+                print(done['agent_0'].shape)
                 info = jax.tree_map(lambda x: x.reshape((config["NUM_ACTORS"])), info)
                 transition = Transition(
                     batchify(done, env.agents, config["NUM_ACTORS"]).squeeze(),
@@ -336,11 +336,15 @@ def make_train(config):
 
 
 
-@hydra.main(version_base=None, config_path="config", config_name="ippo_ff_overcooked")
+@hydra.main(version_base=None, config_path="config", config_name="ippo_ff_normal_save")
 def main(config):
     config = OmegaConf.to_container(config) 
-    layout_name = config["ENV_KWARGS"]["layout"]
-    config["ENV_KWARGS"]["layout"] = overcooked_layouts[config["ENV_KWARGS"]["layout"]]
+    payoffs = jnp.array([
+        [2,-1,-1],
+        [-1,1,1],
+        [-1,1,1]
+    ])
+    config["ENV_KWARGS"]["payoffs"] = payoffs
 
     num_samples = 50
     rng = jax.random.PRNGKey(30)
@@ -349,7 +353,9 @@ def main(config):
         train_vjit = jax.jit(jax.vmap(make_train(config), out_axes=0))
         outs = train_vjit(rng_trains)
 
-    filename = f'{config["ENV_NAME"]}_{layout_name}_save'
+    print("Plotting...")
+
+    filename = f'{config["ENV_NAME"]}_{payoffs}_save'
 
     for i in range(num_samples):
         plt.plot(outs["metrics"]["returned_episode_returns"][i].mean(-1).reshape(-1))

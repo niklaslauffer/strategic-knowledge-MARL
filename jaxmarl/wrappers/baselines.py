@@ -87,7 +87,47 @@ class LogWrapper(JaxMARLWrapper):
         info["returned_episode_returns"] = state.returned_episode_returns
         info["returned_episode_lengths"] = state.returned_episode_lengths
         info["returned_episode"] = jnp.full((self._env.num_agents,), ep_done)
+        print(state.returned_episode_lengths.shape)
         return obs, state, reward, done, info
+
+class LogWrapperCoPolicy(LogWrapper):
+    """Log the episode returns and lengths.
+    NOTE for now for envs where agents terminate at the same time.
+    """
+
+    def __init__(self, env: MultiAgentEnv, replace_info: bool = False):
+        super().__init__(env, replace_info)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step_copolicy(
+        self,
+        key: chex.PRNGKey,
+        state: LogEnvState,
+        action: Union[int, float],
+        co_params
+    ) -> Tuple[chex.Array, LogEnvState, float, bool, dict]:
+        obs, env_state, reward, done, info = self._env.step_copolicy(
+            key, state.env_state, action, co_params
+        )
+        ep_done = done["__all__"]
+        new_episode_return = state.episode_returns + self._batchify_floats(reward)
+        new_episode_length = state.episode_lengths + 1
+        state = LogEnvState(
+            env_state=env_state,
+            episode_returns=new_episode_return * (1 - ep_done),
+            episode_lengths=new_episode_length * (1 - ep_done),
+            returned_episode_returns=state.returned_episode_returns * (1 - ep_done)
+            + new_episode_return * ep_done,
+            returned_episode_lengths=state.returned_episode_lengths * (1 - ep_done)
+            + new_episode_length * ep_done,
+        )
+        if self.replace_info:
+            info = {}
+        info["returned_episode_returns"] = state.returned_episode_returns
+        info["returned_episode_lengths"] = state.returned_episode_lengths
+        info["returned_episode"] = jnp.full((self._env.num_agents,), ep_done)
+        return obs, state, reward, done, info
+
 
 class MPELogWrapper(LogWrapper):
     """ Times reward signal by number of agents within the environment,
@@ -248,6 +288,11 @@ class CTRolloutManager(JaxMARLWrapper):
         if 'smax' in env.name.lower():
             self.global_state = lambda obs, state: obs['world_state']
             self.global_reward = lambda rewards: rewards[self.training_agents[0]]
+        elif 'hanabi' in env.name.lower():
+            self.global_state = self.hanabi_world_state
+        elif 'overcooked' in env.name.lower():
+            self.global_state = lambda obs, state:  jnp.concatenate([obs[agent].ravel() for agent in self.agents], axis=-1)
+            self.global_reward = lambda rewards: rewards[self.training_agents[0]]
     
     @partial(jax.jit, static_argnums=0)
     def batch_reset(self, key):
@@ -271,6 +316,8 @@ class CTRolloutManager(JaxMARLWrapper):
 
     @partial(jax.jit, static_argnums=0)
     def wrapped_step(self, key, state, actions):
+        if 'hanabi' in self._env.name.lower():
+            actions = jax.tree_util.tree_map(lambda x:jnp.expand_dims(x, 0), actions)
         obs_, state, reward, done, infos = self._env.step(key, state, actions)
         if self.preprocess_obs:
             obs = jax.tree_util.tree_map(self._preprocess_obs, {agent:obs_[agent] for agent in self.agents}, self.agents_one_hot)
@@ -290,7 +337,7 @@ class CTRolloutManager(JaxMARLWrapper):
         return jnp.stack([reward[agent] for agent in self.training_agents]).sum(axis=0) 
     
     def batch_sample(self, key, agent):
-        return self.batch_samplers[agent](jax.random.split(key, self.batch_size))
+        return self.batch_samplers[agent](jax.random.split(key, self.batch_size)).astype(int)
 
     @partial(jax.jit, static_argnums=0)
     def _preprocess_obs(self, arr, extra_features):
@@ -302,3 +349,12 @@ class CTRolloutManager(JaxMARLWrapper):
         # concatenate the extra features
         arr = jnp.concatenate((arr, extra_features), axis=-1)
         return arr
+    
+    @partial(jax.jit, static_argnums=0)
+    def hanabi_world_state(self, obs, state):
+        """ 
+        For each agent: [agent obs, own hand]
+        """
+        all_obs = jnp.array([obs[agent] for agent in self._env.agents])
+        hands = state.env_state.player_hands.reshape((self._env.num_agents, -1))
+        return jnp.concatenate((all_obs, hands), axis=1).ravel()
