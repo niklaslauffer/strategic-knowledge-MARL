@@ -4,13 +4,13 @@ Based on the Gymnax and PettingZoo APIs
 
 """
 
+from functools import partial
+from typing import Dict, List, Optional, Tuple
+
+import chex
 import jax
 import jax.numpy as jnp
-from typing import Dict
-import chex
-from functools import partial
 from flax import struct
-from typing import Tuple, Optional
 
 
 @struct.dataclass
@@ -283,7 +283,7 @@ class OverridePlayer2(MultiAgentEnv):
         state_obs = StateObs(states_st, overridden_obs)
 
         return obs_st, state_obs, rewards, dones, infos
-
+    
     def get_obs(self, state: State) -> Dict[str, chex.Array]:
         """Applies observation function to state."""
         base_obs = self.baseEnv.get_obs(state)
@@ -308,21 +308,90 @@ class OverridePlayer2(MultiAgentEnv):
     def agent_classes(self) -> dict:
         return self.baseEnv.agent_classes()
     
-class MultiAgentSlidingWindowEnv(MultiAgentEnv):
+@struct.dataclass
+class StateWindowObs:
+    state: State
+    obs_window: List[chex.Array]
+
+class DelayedObsWrapper(MultiAgentEnv):
     
-    def __init__(self, num_agents: int, window_size: int = 1) -> None:
-        super().__init__(num_agents)
-        self.window_size = window_size
-    
-    def window_reset(self, obs):
-        return [obs] * self.window_size
+    def __init__(self, baseEnv, delay):
+        self.baseEnv = baseEnv
+        self.num_agents = baseEnv.num_agents
+        self.agents = baseEnv.agents
+        self.window_size = delay
+
+    @partial(jax.jit, static_argnums=(0,))
+    def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], StateWindowObs]:
+        obs, state = self.baseEnv.reset(key)
+        dummy_obs = {}
+        for agent, observ in obs.items():
+            dummy_obs[agent] = jnp.zeros_like(observ)
+        obs_window = [dummy_obs] * (self.window_size - 1) + [obs]
+        state = StateWindowObs(state, obs_window)
+        return obs_window[0], state
     
     @partial(jax.jit, static_argnums=(0,))
-    def step(
+    def step_copolicy(
         self,
         key: chex.PRNGKey,
         state: State,
         actions: Dict[str, chex.Array],
+        co_params,
     ) -> Tuple[Dict[str, chex.Array], State, Dict[str, float], Dict[str, bool], Dict]:
         """Performs step transitions in the environment."""
-        obs, states, rewards, dones, infos = super().step(key, state, actions)
+
+        key, key_reset = jax.random.split(key)
+        obs_st, states_st, rewards, dones, infos = self.step_env_copolicy(key, state, actions, co_params)
+
+        obs_re, states_re = self.reset(key_reset)
+
+        # Auto-reset environment based on termination
+        states = jax.tree_map(
+            lambda x, y: jax.lax.select(dones["__all__"], x, y), states_re, states_st
+        )
+        obs = jax.tree_map(
+            lambda x, y: jax.lax.select(dones["__all__"], x, y), obs_re, obs_st
+        )
+        return obs, states, rewards, dones, infos
+
+    def step_env(
+        self, key: chex.PRNGKey, state_window_obs: State, actions: Dict[str, chex.Array]
+    ) -> Tuple[Dict[str, chex.Array], State, Dict[str, float], Dict[str, bool], Dict]:
+        """Environment-specific step transition."""
+        # import pdb; pdb.set_trace()
+
+        obs_st, states_st, rewards, dones, infos = self.baseEnv.step(key, state_window_obs.state, actions)
+        new_obs_window = state_window_obs.obs_window[1:] + [obs_st]
+        new_state_window_obs = StateWindowObs(states_st, new_obs_window)
+        curr_obs = new_state_window_obs.obs_window[0]
+        return curr_obs, new_state_window_obs, rewards, dones, infos
+    
+    def step_env_copolicy(
+        self, key: chex.PRNGKey, state_window_obs: State, actions: Dict[str, chex.Array], coparams
+    ) -> Tuple[Dict[str, chex.Array], State, Dict[str, float], Dict[str, bool], Dict]:
+        """Environment-specific step transition."""
+        # import pdb; pdb.set_trace()
+
+        obs_st, states_st, rewards, dones, infos = self.baseEnv.step_copolicy(key, state_window_obs.state, actions, coparams)
+        new_obs_window = state_window_obs.obs_window[1:] + [obs_st]
+        new_state_window_obs = StateWindowObs(states_st, new_obs_window)
+        curr_obs = new_state_window_obs.obs_window[0]
+        return curr_obs, new_state_window_obs, rewards, dones, infos
+
+    def observation_space(self, agent: str=''):
+        """Observation space for a given agent."""
+        return self.baseEnv.observation_space()
+
+    def action_space(self, agent: str=''):
+        """Action space for a given agent."""
+        return self.baseEnv.action_space(agent)
+
+    @property
+    def name(self) -> str:
+        """Environment name."""
+        return type(self).__name__
+
+    @property
+    def agent_classes(self) -> dict:
+        return self.baseEnv.agent_classes()
