@@ -331,6 +331,10 @@ class DelayedObsWrapper(MultiAgentEnv):
         state = StateWindowObs(state, obs_window)
         return obs_window[0], state
     
+    def __init__(self, baseEnv, delay):
+        self.baseEnv = baseEnv
+        self.window_size = delay
+
     @partial(jax.jit, static_argnums=(0,))
     def step_copolicy(
         self,

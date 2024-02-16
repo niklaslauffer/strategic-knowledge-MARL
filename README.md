@@ -65,6 +65,7 @@ We follow CleanRL's philosophy of providing single file implementations which ca
 | IQL | [Paper](https://arxiv.org/abs/1312.5602v1) | [Source](https://github.com/FLAIROx/JaxMARL/tree/main/baselines/QLearning) | 
 | VDN | [Paper](https://arxiv.org/abs/1706.05296)  | [Source](https://github.com/FLAIROx/JaxMARL/tree/main/baselines/QLearning) |
 | QMIX | [Paper](https://arxiv.org/abs/1803.11485) | [Source](https://github.com/FLAIROx/JaxMARL/tree/main/baselines/QLearning) |
+| TransfQMIX | [Peper](https://www.southampton.ac.uk/~eg/AAMAS2023/pdfs/p1679.pdf) | [Source](https://github.com/FLAIROx/JaxMARL/tree/main/baselines/QLearning) |
 | SHAQ | [Paper](https://arxiv.org/abs/2105.15013) | [Source](https://github.com/FLAIROx/JaxMARL/tree/main/baselines/QLearning) |
 
 <h2 name="install" id="install">Installation 🧗 </h2>
@@ -84,6 +85,7 @@ pip install jaxmarl
 2. The requirements for IPPO & MAPPO can be installed with:
     ``` 
     pip install -e .
+    export PYTHONPATH=./JaxMARL:$PYTHONPATH
     ```
 3. If you would also like to run the Q-learning algorithms, Python 3.9 is required along with additional dependencies:
     ``` 
@@ -108,7 +110,7 @@ import jax
 from jaxmarl import make
 
 key = jax.random.PRNGKey(0)
-key, key_reset, key_act, key_step = jax.random.split(rng, 4)
+key, key_reset, key_act, key_step = jax.random.split(key, 4)
 
 # Initialise environment.
 env = make('MPE_simple_world_comm_v3')
@@ -122,6 +124,16 @@ actions = {agent: env.action_space(agent).sample(key_act[i]) for i, agent in enu
 
 # Perform the step transition.
 obs, state, reward, done, infos = env.step(key_step, state, actions)
+```
+
+### Dockerfile 🐋
+To help get experiments up and running we include a [Dockerfile](https://github.com/FLAIROx/JaxMARL/blob/main/Dockerfile) and its corresponding [Makefile](https://github.com/FLAIROx/JaxMARL/blob/main/Makefile). With Docker and the [Nvidia Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/index.html) installed, the container can be built with:
+```
+make build
+```
+The built container can then be run:
+```
+make run
 ```
 
 ## Contributing 🔨
