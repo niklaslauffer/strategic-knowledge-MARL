@@ -2,29 +2,29 @@
 Based on PureJaxRL Implementation of PPO
 """
 
+import pickle
+from functools import partial
+from typing import Any, NamedTuple, Sequence
+
+import distrax
+import flax.linen as nn
+import hydra
 import jax
 import jax.numpy as jnp
-import flax.linen as nn
+import matplotlib.pyplot as plt
 import numpy as np
-from functools import partial
 import optax
 from flax.linen.initializers import constant, orthogonal
-from typing import Sequence, NamedTuple, Any
 from flax.training.train_state import TrainState
-import distrax
-import jaxmarl
-from jaxmarl.wrappers.baselines import LogWrapperCoPolicy
-from jaxmarl.environments.overcooked import overcooked_layouts
-from jaxmarl.environments.multi_agent_env import OverridePlayer, OverridePlayer2
-from jaxmarl.viz.overcooked_visualizer import OvercookedVisualizer
-from jaxmarl.viz.normal_form_visualizer import animate_triangle
-import hydra
 from omegaconf import OmegaConf
 
-import matplotlib.pyplot as plt
-import pickle
-
+import jaxmarl
 from baselines.IPPO.mer_ff import ActorCritic, Transition, make_train
+from jaxmarl.environments.multi_agent_env import OverridePlayer, OverridePlayer2
+from jaxmarl.environments.overcooked import overcooked_layouts
+from jaxmarl.viz.normal_form_visualizer import animate_triangle
+from jaxmarl.viz.overcooked_visualizer import OvercookedVisualizer
+from jaxmarl.wrappers.baselines import LogWrapperCoPolicy
 
 
 def extract_normal_policy(config, params):
@@ -59,7 +59,7 @@ def test_normal_1():
 
     num_trials = 10
 
-    config = OmegaConf.load('test_config/mer_ff_normal_1.yaml')
+    config = OmegaConf.load('tests/mer/test_config/mer_ff_normal_1.yaml')
     config = OmegaConf.to_container(config) 
 
     payoffs = jnp.array([
@@ -69,7 +69,9 @@ def test_normal_1():
     ])
     config["ENV_KWARGS"]["payoffs"] = payoffs
     config["COPARAMS_SOURCE"] = 'file'
-    config['COPARAMS_FILE'] = f'{config["ENV_NAME"]}_{payoffs}_save_params50.pkl'
+
+    payoff_string = str(payoffs).replace('\n','')
+    config['COPARAMS_FILE'] = f"{config['ENV_NAME']}_{payoff_string}_save_params50.pkl"
 
     rng = jax.random.PRNGKey(30)
     rngs = jax.random.split(rng, num_trials)
@@ -81,6 +83,9 @@ def test_normal_1():
 
     ### Evaluate
     pis = jax.vmap(extract_normal_policy, in_axes=(None, 0))(config, train_state.params)
+
+    for pi in pis.probs:
+        print(pi)
     
     # check convergence in each trial
     for prob in pis.probs:
@@ -114,7 +119,7 @@ def test_normal_2():
 
     num_trials = 10
 
-    config = OmegaConf.load('test_config/mer_ff_normal_2.yaml')
+    config = OmegaConf.load('tests/mer/test_config/mer_ff_normal_2.yaml')
     config = OmegaConf.to_container(config) 
 
     payoffs = jnp.array([
@@ -151,4 +156,4 @@ def test_normal_2():
 
 
 if __name__ == "__main__":
-    test_normal_2()    
+    test_normal_1()    

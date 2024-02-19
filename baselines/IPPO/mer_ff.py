@@ -1,24 +1,26 @@
+import pickle
+from functools import partial
+from typing import Any, NamedTuple, Sequence
+
+import distrax
+import flax.linen as nn
+import hydra
 import jax
 import jax.numpy as jnp
-import flax.linen as nn
+import matplotlib.pyplot as plt
 import numpy as np
-from functools import partial
 import optax
 from flax.linen.initializers import constant, orthogonal
-from typing import Sequence, NamedTuple, Any
 from flax.training.train_state import TrainState
-import distrax
-import jaxmarl
-from jaxmarl.wrappers.baselines import LogWrapperCoPolicy
-from jaxmarl.environments.overcooked import overcooked_layouts
-from jaxmarl.environments.multi_agent_env import OverridePlayer, OverridePlayer2
-from jaxmarl.viz.overcooked_visualizer import OvercookedVisualizer
-from jaxmarl.viz.normal_form_visualizer import animate_triangle
-import hydra
 from omegaconf import OmegaConf
 
-import matplotlib.pyplot as plt
-import pickle
+import jaxmarl
+from data import DATA_DIR
+from jaxmarl.environments.multi_agent_env import OverridePlayer, OverridePlayer2
+from jaxmarl.environments.overcooked import overcooked_layouts
+from jaxmarl.viz.normal_form_visualizer import animate_triangle
+from jaxmarl.viz.overcooked_visualizer import OvercookedVisualizer
+from jaxmarl.wrappers.baselines import LogWrapperCoPolicy
 
 
 class ActorCritic(nn.Module):
@@ -96,7 +98,7 @@ def make_train(config):
     # ])
     if config['COPARAMS_SOURCE'] == 'file':
         filename = config['COPARAMS_FILE']
-        load_params_batch = pickle.load(open(filename, "rb"))
+        load_params_batch = pickle.load(open(DATA_DIR + filename, "rb"))
     elif config['COPARAMS_SOURCE'] == 'pytree':
         load_params_batch = config['COPARAMS_BATCH']
     num_samples = load_params_batch['params']['Dense_2']['bias'].shape[0]
