@@ -20,6 +20,8 @@ from omegaconf import OmegaConf
 
 import jaxmarl
 from baselines.IPPO.mer_ff import ActorCritic, Transition, make_train
+from data import DATA_DIR
+from data.testing import TESTING_DATA_DIR
 from jaxmarl.environments.multi_agent_env import OverridePlayer, OverridePlayer2
 from jaxmarl.environments.overcooked import overcooked_layouts
 from jaxmarl.viz.normal_form_visualizer import animate_triangle
@@ -59,7 +61,7 @@ def test_normal_1():
 
     num_trials = 10
 
-    config = OmegaConf.load('tests/mer/test_config/mer_ff_normal_1.yaml')
+    config = OmegaConf.load(TESTING_DATA_DIR + '/mer_ff_normal_1.yaml')
     config = OmegaConf.to_container(config) 
 
     payoffs = jnp.array([
@@ -71,7 +73,7 @@ def test_normal_1():
     config["COPARAMS_SOURCE"] = 'file'
 
     payoff_string = str(payoffs).replace('\n','')
-    config['COPARAMS_FILE'] = f"{config['ENV_NAME']}_{payoff_string}_save_params50.pkl"
+    config['COPARAMS_FILE'] = DATA_DIR + f"{config['ENV_NAME']}_{payoff_string}_save_params50.pkl"
 
     rng = jax.random.PRNGKey(30)
     rngs = jax.random.split(rng, num_trials)
@@ -119,7 +121,7 @@ def test_normal_2():
 
     num_trials = 10
 
-    config = OmegaConf.load('tests/mer/test_config/mer_ff_normal_2.yaml')
+    config = OmegaConf.load(TESTING_DATA_DIR + 'mer_ff_normal_2.yaml')
     config = OmegaConf.to_container(config) 
 
     payoffs = jnp.array([

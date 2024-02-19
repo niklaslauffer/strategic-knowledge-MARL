@@ -2,23 +2,26 @@
 Based on PureJaxRL Implementation of PPO
 """
 
+import pickle
+from typing import Any, NamedTuple, Sequence
+
+import distrax
+import flax.linen as nn
+import hydra
 import jax
 import jax.numpy as jnp
-import flax.linen as nn
+import matplotlib.pyplot as plt
 import numpy as np
 import optax
 from flax.linen.initializers import constant, orthogonal
-from typing import Sequence, NamedTuple, Any
 from flax.training.train_state import TrainState
-import distrax
-from gymnax.wrappers.purerl import LogWrapper, FlattenObservationWrapper
-import jaxmarl
-from jaxmarl.wrappers.baselines import LogWrapper
-import hydra
+from gymnax.wrappers.purerl import FlattenObservationWrapper, LogWrapper
 from omegaconf import OmegaConf
 
-import matplotlib.pyplot as plt
-import pickle
+import jaxmarl
+from data import DATA_DIR
+from jaxmarl.wrappers.baselines import LogWrapper
+
 
 class ActorCritic(nn.Module):
     action_dim: Sequence[int]
@@ -355,18 +358,19 @@ def main(config):
 
     print("Plotting...")
 
-    filename = f'{config["ENV_NAME"]}_{payoffs}_save'
+    payoffs_str = str(payoffs).replace("\n", "")
+    filepath = DATA_DIR + f'{config["ENV_NAME"]}_{payoffs_str}_save'
 
     for i in range(num_samples):
         plt.plot(outs["metrics"]["returned_episode_returns"][i].mean(-1).reshape(-1))
     plt.xlabel("Update Step")
     plt.ylabel("Return")
-    plt.savefig(f'{filename}.png')
+    plt.savefig(f'{filepath}.png')
 
     train_states = outs["runner_state"][0]
     # for i in range(num_samples):
 
-    pickle.dump(train_states.params, open(f'{filename}_params{num_samples}.pkl', "wb"))
+    pickle.dump(train_states.params, open(f'{filepath}_params{num_samples}.pkl', "wb"))
 
 if __name__ == "__main__":
     main()

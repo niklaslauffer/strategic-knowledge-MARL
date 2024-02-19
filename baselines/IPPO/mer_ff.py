@@ -97,8 +97,8 @@ def make_train(config):
     #     [-1,1]
     # ])
     if config['COPARAMS_SOURCE'] == 'file':
-        filename = config['COPARAMS_FILE']
-        load_params_batch = pickle.load(open(DATA_DIR + filename, "rb"))
+        filepath = config['COPARAMS_FILE']
+        load_params_batch = pickle.load(open(filepath, "rb"))
     elif config['COPARAMS_SOURCE'] == 'pytree':
         load_params_batch = config['COPARAMS_BATCH']
     num_samples = load_params_batch['params']['Dense_2']['bias'].shape[0]
