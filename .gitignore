@@ -8,6 +8,9 @@ __pycache__/
 .vscode/
 docker/*
 *.pickle
+*.pkl
+*.png
+*.gif
 results/
 docs/
 tmp/
