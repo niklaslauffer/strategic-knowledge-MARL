@@ -30,7 +30,7 @@ def probs2params(key, probs, config):
 
     return params
 
-def run_fixed_coparam_setup(rng, payoffs, probs, num_trials=10):
+def run_fixed_coparam_setup(rng, payoffs, probs, num_trials=10, num_particles=2):
     config = OmegaConf.load(TESTING_DATA_DIR + 'test_mer_ff_normal.yaml')
     config = OmegaConf.to_container(config) 
 
@@ -41,6 +41,7 @@ def run_fixed_coparam_setup(rng, payoffs, probs, num_trials=10):
 
     config["COPARAMS_SOURCE"] = 'pytree'
     config["COPARAMS_BATCH"] = coparams
+    config["NUM_PARTICLES"] = num_particles
 
     return run_test_core(rng, config, num_trials)
 
