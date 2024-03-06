@@ -41,6 +41,7 @@ def run_fixed_coparam_setup(rng, payoffs, probs, override_config={}, num_trials=
 
     config["COPARAMS_SOURCE"] = 'pytree'
     config["COPARAMS_BATCH"] = coparams
+    config["NUM_PARTICLES"] = num_particles
 
     config.update(override_config)
 

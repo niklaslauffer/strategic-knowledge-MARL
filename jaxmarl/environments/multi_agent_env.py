@@ -312,6 +312,7 @@ class OverridePlayer2(MultiAgentEnv):
 class StateWindowObs:
     state: State
     obs_window: List[chex.Array]
+    most_recent_timestep: int
 
 class DelayedObsWrapper(MultiAgentEnv):
     
@@ -324,13 +325,37 @@ class DelayedObsWrapper(MultiAgentEnv):
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], StateWindowObs]:
         obs, state = self.baseEnv.reset(key)
-        dummy_obs = {}
-        for agent, observ in obs.items():
-            dummy_obs[agent] = jnp.zeros_like(observ)
-        obs_window = [dummy_obs] * (self.window_size - 1) + [obs]
-        state = StateWindowObs(state, obs_window)
+        
+        dummy_obs, timestep = self.update_obs_dict(obs, -1, dummy=True)
+        obs_window = [dummy_obs]
+        for _ in range(self.window_size - 1):
+            new_dummy_obs, timestep = self.update_obs_dict(obs, timestep, dummy=True)
+            obs_window.append(new_dummy_obs)
+        new_current_obs, timestep = self.update_obs_dict(obs, timestep)
+        obs_window.append(new_current_obs)
+        # obs_window = [dummy_obs] * (self.window_size - 1) + [obs]
+        state = StateWindowObs(state, obs_window, timestep)
         return obs_window[0], state
 
+    def update_obs_dict(self, obs_dict, prev_timestep, dummy=False):
+        new_obs = {}
+        for agent, observ in obs_dict.items():
+            if dummy:
+                observ = jnp.zeros_like(observ)
+            new_dummy_observ, timestep = self.add_timestep_dimension(observ, prev_timestep)
+            new_obs[agent] = new_dummy_observ
+        return new_obs, timestep
+    
+    def __init__(self, baseEnv, delay):
+        self.baseEnv = baseEnv
+        self.window_size = delay
+    
+    def add_timestep_dimension(self, observation_array, prev_timestep):
+        timestep_layer = jnp.zeros(observation_array.shape[:-1])
+        new_timestep_layer = timestep_layer.at[tuple(0 for _ in range(timestep_layer.ndim))].set(prev_timestep + 1)
+        return jnp.concatenate([observation_array, jnp.expand_dims(new_timestep_layer, -1)], axis=-1), prev_timestep + 1
+    
+        
     @partial(jax.jit, static_argnums=(0,))
     def step_copolicy(
         self,
@@ -353,7 +378,7 @@ class DelayedObsWrapper(MultiAgentEnv):
         obs = jax.tree_map(
             lambda x, y: jax.lax.select(dones["__all__"], x, y), obs_re, obs_st
         )
-        return obs, states, rewards, dones, infos
+        return obs, states, rewards, dones, infos        
 
     def step_env(
         self, key: chex.PRNGKey, state_window_obs: State, actions: Dict[str, chex.Array]
@@ -362,8 +387,9 @@ class DelayedObsWrapper(MultiAgentEnv):
         # import pdb; pdb.set_trace()
 
         obs_st, states_st, rewards, dones, infos = self.baseEnv.step(key, state_window_obs.state, actions)
+        obs_st, new_timestep = self.update_obs_dict(obs_st, state_window_obs.most_recent_timestep)
         new_obs_window = state_window_obs.obs_window[1:] + [obs_st]
-        new_state_window_obs = StateWindowObs(states_st, new_obs_window)
+        new_state_window_obs = StateWindowObs(states_st, new_obs_window, new_timestep)
         curr_obs = new_state_window_obs.obs_window[0]
         return curr_obs, new_state_window_obs, rewards, dones, infos
     
@@ -374,14 +400,22 @@ class DelayedObsWrapper(MultiAgentEnv):
         # import pdb; pdb.set_trace()
 
         obs_st, states_st, rewards, dones, infos = self.baseEnv.step_copolicy(key, state_window_obs.state, actions, coparams)
+        obs_st, new_timestep = self.update_obs_dict(obs_st, state_window_obs.most_recent_timestep)
         new_obs_window = state_window_obs.obs_window[1:] + [obs_st]
-        new_state_window_obs = StateWindowObs(states_st, new_obs_window)
+        new_state_window_obs = StateWindowObs(states_st, new_obs_window, new_timestep)
         curr_obs = new_state_window_obs.obs_window[0]
         return curr_obs, new_state_window_obs, rewards, dones, infos
 
     def observation_space(self, agent: str=''):
         """Observation space for a given agent."""
+<<<<<<< HEAD
         return self.baseEnv.observation_space(agent)
+=======
+        original_obs_list = list(self.baseEnv.observation_space())
+        original_obs_list[-1] += 1
+        return tuple(original_obs_list)
+
+>>>>>>> 0d0908c8febec4e052bbf6430fdfee76b0122c1b
 
     def action_space(self, agent: str=''):
         """Action space for a given agent."""

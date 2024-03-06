@@ -165,6 +165,83 @@ def counter_example1():
         #    or (prob[1][0] >= .95 and prob[0][1] >= .95))
 
 
+def test_normal_3_by_3_unbalanced():
+
+    rng = jax.random.PRNGKey(30)
+
+    payoffs = jnp.array([
+        [2,0,0],
+        [0,0,3],
+        [0,1,0]
+    ])
+    probs = jnp.array([[.98,.01,.01],
+                       [.98,.01,.01],
+                       [.01,.98,.01],
+                       [.01,.01,.98]])
+
+    pis = run_fixed_coparam_setup(rng, payoffs, probs)
+
+    # for pi in pis.probs:
+    #     print(pi)
+    
+    # check convergence in each trial
+    for prob in pis.probs:
+        assert((prob[0][0] >= .95 and prob[1][1]+prob[1][2] >= .95)
+           or (prob[1][0] >= .95 and prob[0][1]+prob[0][2] >= .95))
+
+
+
+def test_normal_2_by_2_simple():
+
+    rng = jax.random.PRNGKey(30)
+
+    payoffs = jnp.array([
+        [0,-1],
+        [-1,1]
+    ])
+    probs = jnp.array([[.98,.02],
+                       [.98,.02],
+                       [.60,.40],
+                       [.70,.30]])
+    # All the particles go to the first action (the second one is not worth it because you always risk getting -1 and the first one is better than the second one in expectation)
+
+    pis = run_fixed_coparam_setup(rng, payoffs, probs)
+
+    for pi in pis.probs:
+        print(pi)
+    
+    # check convergence in each trial
+    for prob in pis.probs:
+        assert((prob[0][0] >= .95 and prob[1][1]+prob[1][2] >= .95)
+           or (prob[1][0] >= .95 and prob[0][1]+prob[0][2] >= .95))
+        
+
+def test_normal_2_by_2_simple_unbalanced():
+
+    rng = jax.random.PRNGKey(30)
+
+    payoffs = jnp.array([
+        [0,-1],
+        [-1,2]
+    ])
+    probs = jnp.array([[.98,.02],
+                       [.98,.02],
+                       [.60,.40],
+                       [.70,.30]])
+    # The two particles cover the two possible actions.
+    
+    pis = run_fixed_coparam_setup(rng, payoffs, probs)
+
+    for pi in pis.probs:
+        print(pi)
+    
+    # check convergence in each trial
+    for prob in pis.probs:
+        assert((prob[0][0] >= .95 and prob[1][1]+prob[1][2] >= .95)
+           or (prob[1][0] >= .95 and prob[0][1]+prob[0][2] >= .95))
+
+
+
 if __name__ == "__main__":
     jnp.set_printoptions(precision=3, suppress=True)
     test_normal_4_by_4_balanced_2particles()
