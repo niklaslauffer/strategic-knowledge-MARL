@@ -163,10 +163,10 @@ def make_train(config):
 
     def train(rng):
             
-        co_network = ActorCritic(base_env.action_space().n, activation=config["ACTIVATION"])
+        co_network = ActorCritic(base_env.action_space(base_env.agents[0]).n, activation=config["ACTIVATION"])
         rng, key_a = jax.random.split(rng, 2)
 
-        init_x = jnp.zeros(base_env.observation_space().shape)
+        init_x = jnp.zeros(base_env.observation_space(base_env.agents[0]).shape)
         init_x = init_x.flatten()
 
         co_network.init(key_a, init_x)
@@ -176,8 +176,9 @@ def make_train(config):
 
 
         # INIT NETWORK
-        network = ActorCritic(env.action_space().n, activation=config["ACTIVATION"])
-        init_x = jnp.zeros(env.observation_space().shape)
+        # now agent 0 is the ego agent since we override the previous agent earlier
+        network = ActorCritic(env.action_space(env.agents[0]).n, activation=config["ACTIVATION"])
+        init_x = jnp.zeros(env.observation_space(env.agents[0]).shape)
         
         init_x = init_x.flatten()
 
@@ -294,7 +295,11 @@ def make_train(config):
 
 
             traj_returns = traj_batch.info["returned_episode_returns"].reshape((config["NUM_STEPS"], config["NUM_PARTICLES"], config['NUM_COPOLICIES'], config["NUM_ENVS"]))
-            avg_returns = traj_returns.mean(axis=-1).mean(axis=0) # TODO add in discount to average reward
+            avg_returns = traj_returns.mean(axis=-1).sum(axis=0) # TODO add in discount to average reward
+            # std_returns = traj_returns.sum(axis=0).std(axis=-1)
+            # std_mean_returns = std_returns / jnp.sqrt(config["NUM_ENVS"])
+            # jax.debug.print("mean\n{x}", x=avg_returns)
+            # jax.debug.print("std {x}", x=std_mean_returns)
             grad_mask = jnp.zeros((config["NUM_STEPS"], config["NUM_PARTICLES"], config['NUM_COPOLICIES'], config["NUM_ENVS"]))
 
             if config['MATCHING'] == "single":
@@ -303,27 +308,54 @@ def make_train(config):
                     grad_mask = grad_mask.at[:,max_idx,k,:].set(1)
                     avg_returns = avg_returns.at[max_idx,:].set(jnp.ones(config["NUM_COPOLICIES"]) * -jnp.inf)
             elif config['MATCHING'] == "multi_averaged":
-                for k in range(config["NUM_COPOLICIES"]):
-                    max_idx = jnp.argmax(avg_returns[:,k])
-                    grad_mask = grad_mask.at[:,max_idx,k,:].set(1)
-
-                grad_mask_sum = jnp.expand_dims(jnp.sum(grad_mask, axis=2), axis=2)
-                # avoid divide by zeros
-                grad_mask = jnp.where(grad_mask_sum==0, 0, jnp.divide(grad_mask, grad_mask_sum))
-            elif config['MATCHING'] == "multi_scaled":
-                avg_returns = avg_returns - jnp.min(avg_returns, axis=1, keepdims=True)
-                # avg_returns = avg_returns / jnp.max(avg_returns, axis=1, keepdims=True)
-                avg_returns = avg_returns / jnp.sum(avg_returns, axis=1, keepdims=True)
-                avg_returns = jnp.nan_to_num(avg_returns, nan=0.5)
-                for k in range(config["NUM_COPOLICIES"]):
-                    max_idx = jnp.argmax(avg_returns[:,k])
-                    grad_mask = grad_mask.at[:,max_idx,k,:].set(1)
+                max_idxs = jnp.argmax(avg_returns, axis=0)
+                col_idxs = jnp.arange(config["NUM_COPOLICIES"])
+                grad_mask = grad_mask.at[:,max_idxs,col_idxs,:].set(1)
 
                 grad_mask_sum = jnp.sum(grad_mask, axis=2, keepdims=True)
                 # avoid divide by zeros
                 grad_mask = jnp.where(grad_mask_sum==0, 0, jnp.divide(grad_mask, grad_mask_sum))
+            elif config['MATCHING'] == "linear_rescale":
+                max_returns_with_copolicy = jnp.max(avg_returns, axis=0, keepdims=True)
+                # for n in range(config["NUM_PARTICLES"]):
+                relative_return = avg_returns - max_returns_with_copolicy
+                max_relative_return = jnp.max(relative_return, axis=1, keepdims=True)
+                avg_returns = avg_returns - max_relative_return + jnp.finfo(avg_returns.dtype).eps
+            
+                max_idxs = jnp.argmax(avg_returns, axis=0)
+                col_idxs = jnp.arange(config["NUM_COPOLICIES"])
+                grad_mask = grad_mask.at[:,max_idxs,col_idxs,:].set(1)
 
-            # jax.debug.print("{x}", x=grad_mask[0,:,:,0])
+                grad_mask_sum = jnp.sum(grad_mask, axis=2, keepdims=True)
+                # avoid divide by zeros
+                grad_mask = jnp.where(grad_mask_sum==0, 0, jnp.divide(grad_mask, grad_mask_sum))
+            elif config['MATCHING'] == "averaged_otherwise_every":
+                max_idxs = jnp.argmax(avg_returns, axis=0)
+                col_idxs = jnp.arange(config["NUM_COPOLICIES"])
+                grad_mask = grad_mask.at[:,max_idxs,col_idxs,:].set(1)
+
+                every_max_mask = jnp.full((config["NUM_PARTICLES"], config["NUM_COPOLICIES"]), 1.0/config["NUM_COPOLICIES"])
+                every_max_mask = jnp.expand_dims(every_max_mask, axis=(0,3))
+                
+                grad_mask_sum = jnp.sum(grad_mask, axis=2, keepdims=True)
+                grad_mask = jnp.where(grad_mask_sum==0, every_max_mask, jnp.divide(grad_mask, grad_mask_sum))
+
+            elif config['MATCHING'] == "normalized_rescale":
+                avg_returns = avg_returns - jnp.min(avg_returns, axis=1, keepdims=True)
+                avg_returns = avg_returns / jnp.max(avg_returns, axis=1, keepdims=True)
+                # avg_returns = avg_returns / jnp.sum(avg_returns, axis=1, keepdims=True)
+                avg_returns = jnp.nan_to_num(avg_returns, nan=1.0/config["NUM_PARTICLES"])
+                max_idxs = jnp.argmax(avg_returns, axis=0)
+                col_idxs = jnp.arange(config["NUM_COPOLICIES"])
+                grad_mask = grad_mask.at[:,max_idxs,col_idxs,:].set(1)
+
+                grad_mask_sum = jnp.sum(grad_mask, axis=2, keepdims=True)
+                # avoid divide by zeros
+                grad_mask = jnp.where(grad_mask_sum==0, 0, jnp.divide(grad_mask, grad_mask_sum))
+            else:
+                raise ValueError('Invalid MER matching type.') 
+
+            # jax.debug.print("grad_mask\n{x}", x=grad_mask[0,:,:,0])
             grad_mask = grad_mask.reshape((config["NUM_STEPS"], -1))
 
 
@@ -471,7 +503,8 @@ def make_train(config):
                     lambda x : x.reshape((config["NUM_STEPS"], config["NUM_PARTICLES"], config['NUM_COPOLICIES']*config["NUM_ENVS"]) + x.shape[2:]), traj_batch.info
                 )
             metric['grad_mask'] = grad_mask
-            metric['actions'] = traj_batch.action
+            # metric['avg_returns'] = avg_returns
+            # metric['actions'] = traj_batch.action
             metric['action_probs'] = traj_batch.action_probs
             rng = update_state[-1]
             

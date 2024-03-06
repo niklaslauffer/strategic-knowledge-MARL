@@ -616,7 +616,7 @@ class Overcooked(MultiAgentEnv):
             dtype=jnp.uint32
         )
 
-    def observation_space(self) -> spaces.Box:
+    def observation_space(self, agent="") -> spaces.Box:
         """Observation space of the environment."""
         return spaces.Box(0, 255, self.obs_shape)
 

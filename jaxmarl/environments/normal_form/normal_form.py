@@ -51,9 +51,10 @@ class NormalForm(MultiAgentEnv):
     
     def action_space(self, agent_id="") -> Discrete:
         """Action space of the environment. Agent_id not used since action_space is uniform for all agents"""
-        return self.all_action_space
 
-    def observation_space(self) -> Discrete:
+        return self.action_spaces[agent_id]
+
+    def observation_space(self, agent_id="") -> Discrete:
         """Observation space of the environment."""
         return Discrete(self.num_agents)
 

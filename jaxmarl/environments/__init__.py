@@ -1,4 +1,4 @@
-from .multi_agent_env import MultiAgentEnv, State
+from .multi_agent_env import MultiAgentEnv, State, DelayedObsWrapper
 from .mpe import (
     SimpleMPE,
     SimpleTagMPE,

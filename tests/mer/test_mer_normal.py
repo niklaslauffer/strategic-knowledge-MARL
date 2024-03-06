@@ -13,6 +13,10 @@ from data.testing import TESTING_DATA_DIR
 from tests.mer.utils import run_fixed_coparam_setup, run_test_core
 
 
+"""
+Testing for normal form games. The particles play columns and the copolicies play rows.
+"""
+
 def test_normal_3_by_3_learned_policies():
 
     rng = jax.random.PRNGKey(30)
@@ -32,7 +36,7 @@ def test_normal_3_by_3_learned_policies():
     config['COPARAMS_FILE'] = DATA_DIR + f"{config['ENV_NAME']}_{payoff_string}_save_params50.pkl"
 
     ### Evaluate
-    pis = run_test_core(rng, config)
+    pis, _ = run_test_core(rng, config)
     
     # check convergence in each trial
     for prob in pis.probs:
@@ -54,7 +58,7 @@ def test_normal_3_by_3_balanced():
                        [.01,.98,.01],
                        [.01,.01,.98]])
 
-    pis = run_fixed_coparam_setup(rng, payoffs, probs)
+    pis, _ = run_fixed_coparam_setup(rng, payoffs, probs)
 
     # for pi in pis.probs:
     #     print(pi)
@@ -63,7 +67,104 @@ def test_normal_3_by_3_balanced():
     for prob in pis.probs:
         assert((prob[0][0] >= .95 and prob[1][1]+prob[1][2] >= .95)
            or (prob[1][0] >= .95 and prob[0][1]+prob[0][2] >= .95))
+        
+
+def test_normal_4_by_4_balanced_2particles():
+
+    rng = jax.random.PRNGKey(30)
+
+    payoffs = jnp.array([
+        [ 2, 0, 0, 0],
+        [ 0, 2, 0, 0],
+        [ 0, 0, 1, 1],
+        [-1,-1,-1,-1]
+    ])
+    probs = jnp.array([[.97,.01,.01,.01],
+                       [.01,.97,.01,.01],
+                       [.01,.01,.97,.01],
+                       [.01,.01,.01,.97,]])
+    
+    pis, _ = run_fixed_coparam_setup(rng, payoffs, probs)        
+    
+    # check convergence in each trial
+    for prob in pis.probs:
+        print(prob)
+        assert((prob[0][0] >= .95 and prob[1][1] >= .95)
+           or (prob[1][0] >= .95 and prob[0][1] >= .95))
+        
+def test_dominance_problem():
+    """ This test is a negative result. We need scaling to solve the dominance in this problem."""
+
+    rng = jax.random.PRNGKey(27)
+
+    payoffs = jnp.array([
+        [ 2, 0, 0,-1,-1,-1,-1,-1,-1],
+        [ 0, 2, 0,-1,-1,-1,-1,-1,-1],
+        [ 0, 0, 1,-1,-1,-1,-1,-1,-1]
+    ])
+    probs = jnp.array([[.98,.01,.01],
+                       [.01,.98,.01],
+                       [.01,.01,.98]])
+    
+    override_config = {"MATCHING" : "multi_averaged", "NUM_PARTICLES" : 3, "NUM_STEPS": 100, "TOTAL_TIMESTEPS": 5e5, "LR": 2.5e-3}
+
+    pis, _ = run_fixed_coparam_setup(rng, payoffs, probs, override_config)        
+    
+    # check convergence in each trial
+    success = True
+    for prob in pis.probs:
+        success = success and (any(prob[:,0] >= .9)
+           and any(prob[:,1] >= .9)
+           and any(prob[:,2] >= .9))
+        
+    assert(not success)
+        
+def test_dominance_problem_scaling():
+
+    rng = jax.random.PRNGKey(27)
+
+    payoffs = jnp.array([
+        [ 2, 0, 0,-1,-1,-1,-1,-1,-1],
+        [ 0, 2, 0,-1,-1,-1,-1,-1,-1],
+        [ 0, 0, 1,-1,-1,-1,-1,-1,-1]
+    ])
+    probs = jnp.array([[.98,.01,.01],
+                       [.01,.98,.01],
+                       [.01,.01,.98]])
+    
+    override_config = {"MATCHING" : "averaged_otherwise_every", "NUM_PARTICLES" : 3, "NUM_STEPS": 100, "TOTAL_TIMESTEPS": 5e5, "LR": 2.5e-3}
+
+    pis, _ = run_fixed_coparam_setup(rng, payoffs, probs, override_config)        
+    
+    # check convergence in each trial
+    for prob in pis.probs:
+        assert(any(prob[:,0] >= .9)
+           and any(prob[:,1] >= .9)
+           and any(prob[:,2] >= .9))
+        
+def counter_example1():
+
+    rng = jax.random.PRNGKey(30)
+
+    payoffs = jnp.array([
+        [1,0],
+        [0,2]
+    ])
+    probs = jnp.array([[.60,.40], # should respond with 1
+                       [.70,.30]]) # should respond with 0
+
+    pis, _ = run_fixed_coparam_setup(rng, payoffs, probs, num_trials=1)
+
+    # for pi in pis.probs:
+    #     print(pi)
+    
+    # check convergence in each trial
+    for prob in pis.probs:
+        print(prob)
+        # assert((prob[0][0] >= .95 and prob[1][1] >= .95)
+        #    or (prob[1][0] >= .95 and prob[0][1] >= .95))
 
 
 if __name__ == "__main__":
-    test_normal_3_by_3_learned_policies()
+    jnp.set_printoptions(precision=3, suppress=True)
+    test_normal_4_by_4_balanced_2particles()
