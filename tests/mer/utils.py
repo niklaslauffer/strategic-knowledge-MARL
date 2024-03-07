@@ -9,15 +9,15 @@ from data.testing import TESTING_DATA_DIR
 from jaxmarl.environments.multi_agent_env import OverridePlayer
 
 
-def probs2params(key, probs, config):
+def probs2params(key, probs, config, agent_idx):
 
     env = jaxmarl.make(config["ENV_NAME"], **config["ENV_KWARGS"])
 
-    action_space_size = env.action_space(env.agents[0]).n
+    action_space_size = env.action_space(env.agents[agent_idx]).n
     network = ActorCritic(action_space_size, activation=config["ACTIVATION"])
     key, key_a = jax.random.split(key, 2)
 
-    init_x = jnp.zeros(env.observation_space().shape)
+    init_x = jnp.zeros(env.observation_space(env.agents[agent_idx]).shape)
     init_x = init_x.flatten()
 
     init_params = network.init(key_a, init_x)
@@ -58,16 +58,16 @@ def run_test_core(rng, config, num_trials=10):
 
     ### Evaluate
     extract_rng = jax.random.split(rng, num_trials)
-    return jax.vmap(extract_normal_policy, in_axes=(0, None, 0, None, None))(extract_rng, config, train_state.params, "agent_1"), metrics
+    return jax.vmap(extract_normal_policy, in_axes=(0, None, 0, None))(extract_rng, config, train_state.params, 1), metrics
 
-def extract_normal_policy(key, config, params, agent_id):
+def extract_normal_policy(key, config, params, agent_idx):
     env = jaxmarl.make(config["ENV_NAME"], **config["ENV_KWARGS"])
 
-    action_space_size = env.action_space(agent_id).n
+    action_space_size = env.action_space(env.agents[agent_idx]).n
     network = ActorCritic(action_space_size, activation=config["ACTIVATION"])
     key, key_a = jax.random.split(key, 2)
 
-    init_x = jnp.zeros(env.observation_space(agent_id).shape)
+    init_x = jnp.zeros(env.observation_space(env.agents[agent_idx]).shape)
     init_x = init_x.flatten()
 
     network.init(key_a, init_x)
@@ -75,6 +75,6 @@ def extract_normal_policy(key, config, params, agent_id):
     key, _rng = jax.random.split(key)
     # reset_rng = jax.random.split(_rng, batch_size)
     obs, _ = env.reset(_rng)
-    pis, _ = jax.vmap(network.apply, in_axes=(0,None))(params, [obs[agent_id]])
+    pis, _ = jax.vmap(network.apply, in_axes=(0,None))(params, [obs[env.agents[agent_idx]]])
 
     return pis
