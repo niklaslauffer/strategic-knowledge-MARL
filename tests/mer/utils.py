@@ -41,14 +41,14 @@ def run_fixed_coparam_setup(rng, payoffs, probs, override_config={}, num_trials=
 
     config["COPARAMS_SOURCE"] = 'pytree'
     config["COPARAMS_BATCH"] = coparams
-    config["NUM_PARTICLES"] = num_particles
 
     config.update(override_config)
 
     return run_test_core(rng, config, num_trials)
 
 def run_test_core(rng, config, num_trials=10):
-    rngs = jax.random.split(rng, num_trials)
+    rng, _rng = jax.random.split(rng, 2)
+    rngs = jax.random.split(_rng, num_trials)
     with jax.disable_jit(False):
         train_jit = jax.jit(make_train(config))
         out = jax.vmap(train_jit)(rngs)
@@ -57,32 +57,24 @@ def run_test_core(rng, config, num_trials=10):
     metrics = out["metrics"]
 
     ### Evaluate
-    return jax.vmap(extract_normal_policy, in_axes=(None, 0))(config, train_state.params), metrics
+    extract_rng = jax.random.split(rng, num_trials)
+    return jax.vmap(extract_normal_policy, in_axes=(0, None, 0, None, None))(extract_rng, config, train_state.params, "agent_1"), metrics
 
-def extract_normal_policy(config, params):
+def extract_normal_policy(key, config, params, agent_id):
     env = jaxmarl.make(config["ENV_NAME"], **config["ENV_KWARGS"])
 
-    co_network = ActorCritic(env.action_space(env.agents[0]).n, activation=config["ACTIVATION"])
-    key = jax.random.PRNGKey(0)
-    key, key_a = jax.random.split(key, 2)
-
-    init_x = jnp.zeros(env.observation_space().shape)
-    init_x = init_x.flatten()
-
-    co_network.init(key_a, init_x)
-
-    env = OverridePlayer(env, [env.agents[0]], co_network)
-
-    action_space_size = env.action_space(env.agents[0]).n
+    action_space_size = env.action_space(agent_id).n
     network = ActorCritic(action_space_size, activation=config["ACTIVATION"])
     key, key_a = jax.random.split(key, 2)
 
-    init_x = jnp.zeros(env.observation_space().shape)
+    init_x = jnp.zeros(env.observation_space(agent_id).shape)
     init_x = init_x.flatten()
 
     network.init(key_a, init_x)
-    dummy_obs = np.ones((config["NUM_PARTICLES"],1))
 
-    pis, _ = jax.vmap(network.apply, in_axes=(0,0))(params, dummy_obs)
+    key, _rng = jax.random.split(key)
+    # reset_rng = jax.random.split(_rng, batch_size)
+    obs, _ = env.reset(_rng)
+    pis, _ = jax.vmap(network.apply, in_axes=(0,None))(params, [obs[agent_id]])
 
     return pis

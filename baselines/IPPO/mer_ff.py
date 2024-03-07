@@ -16,7 +16,7 @@ from omegaconf import OmegaConf
 
 import jaxmarl
 from data import DATA_DIR
-from jaxmarl.environments.multi_agent_env import OverridePlayer, OverridePlayer2
+from jaxmarl.environments.multi_agent_env import OverridePlayer
 from jaxmarl.environments.overcooked import overcooked_layouts
 from jaxmarl.viz.normal_form_visualizer import animate_triangle
 from jaxmarl.viz.overcooked_visualizer import OvercookedVisualizer
@@ -163,17 +163,16 @@ def make_train(config):
 
     def train(rng):
             
-        co_network = ActorCritic(base_env.action_space(base_env.agents[0]).n, activation=config["ACTIVATION"])
+        co_network = ActorCritic(base_env.action_space(base_env.agents[config["COPLAYER"]]).n, activation=config["ACTIVATION"])
         rng, key_a = jax.random.split(rng, 2)
 
-        init_x = jnp.zeros(base_env.observation_space(base_env.agents[0]).shape)
+        init_x = jnp.zeros(base_env.observation_space(base_env.agents[config["COPLAYER"]]).shape)
         init_x = init_x.flatten()
 
         co_network.init(key_a, init_x)
         
-        env = OverridePlayer(base_env, [base_env.agents[0]], co_network)
+        env = OverridePlayer(base_env, [base_env.agents[config["COPLAYER"]]], co_network)
         env = LogWrapperCoPolicy(env)
-
 
         # INIT NETWORK
         # now agent 0 is the ego agent since we override the previous agent earlier

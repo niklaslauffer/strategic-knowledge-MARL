@@ -236,77 +236,6 @@ class MultiAgentSlidingWindowEnv(MultiAgentEnv):
         """Performs step transitions in the environment."""
         obs, states, rewards, dones, infos = super().step(key, state, actions) 
 
-@struct.dataclass
-class StateObs:
-    state: State
-    obs: Dict[str, chex.Array]
-
-class OverridePlayer2(MultiAgentEnv):
-    def __init__(self, baseEnv, agent_override):
-        # self.__class__ = type(baseEnv.__class__.__name__,
-        #                       (self.__class__, baseEnv.__class__),
-        #                       {})
-        # self.__dict__ = baseEnv.__dict__
-        self.baseEnv = baseEnv
-        self.agents = [agent for agent in baseEnv.agents if agent not in agent_override]
-        self.num_agents = baseEnv.num_agents - len(agent_override)
-        self.overridden_agents = agent_override.keys()
-        self.overridden_policies = agent_override
-
-
-    @partial(jax.jit, static_argnums=(0,))
-    def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], State]:
-        b_obs, b_state = self.baseEnv.reset(key)
-        
-        overridden_obs = {}
-        for agent in self.overridden_agents:
-            overridden_obs[agent] = b_obs.pop(agent)
-
-        state_obs = StateObs(b_state, overridden_obs)
-        return b_obs, state_obs
-
-    def step_env(
-        self, key: chex.PRNGKey, state_obs: State, actions: Dict[str, chex.Array]
-    ) -> Tuple[Dict[str, chex.Array], State, Dict[str, float], Dict[str, bool], Dict]:
-        """Environment-specific step transition."""
-        for agent in self.overridden_agents:
-            actions[agent] = self.overridden_policies[agent](state_obs.obs[agent])
-
-        obs_st, states_st, rewards, dones, infos = self.baseEnv.step(key, state_obs.state, actions)
-
-        overridden_obs = {}
-        for agent in self.overridden_agents:
-            overridden_obs[agent] = obs_st.pop(agent)
-            rewards.pop(agent)
-            dones.pop(agent)
-        
-        state_obs = StateObs(states_st, overridden_obs)
-
-        return obs_st, state_obs, rewards, dones, infos
-    
-    def get_obs(self, state: State) -> Dict[str, chex.Array]:
-        """Applies observation function to state."""
-        base_obs = self.baseEnv.get_obs(state)
-        for agent in self.overridden_agents:
-            base_obs.pop(agent)
-        return base_obs
-
-    def observation_space(self, agent: str=''):
-        """Observation space for a given agent."""
-        return self.baseEnv.observation_space()
-
-    def action_space(self, agent: str=''):
-        """Action space for a given agent."""
-        return self.baseEnv.action_space(agent)
-
-    @property
-    def name(self) -> str:
-        """Environment name."""
-        return type(self).__name__
-
-    @property
-    def agent_classes(self) -> dict:
-        return self.baseEnv.agent_classes()
     
 @struct.dataclass
 class StateWindowObs:
@@ -408,14 +337,10 @@ class DelayedObsWrapper(MultiAgentEnv):
 
     def observation_space(self, agent: str=''):
         """Observation space for a given agent."""
-<<<<<<< HEAD
-        return self.baseEnv.observation_space(agent)
-=======
         original_obs_list = list(self.baseEnv.observation_space())
         original_obs_list[-1] += 1
         return tuple(original_obs_list)
 
->>>>>>> 0d0908c8febec4e052bbf6430fdfee76b0122c1b
 
     def action_space(self, agent: str=''):
         """Action space for a given agent."""
