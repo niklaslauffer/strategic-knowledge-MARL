@@ -16,11 +16,11 @@ from omegaconf import OmegaConf
 
 import jaxmarl
 from data import DATA_DIR
-from jaxmarl.environments.multi_agent_env import OverridePlayer
+from jaxmarl.environments.multi_agent_env import OverridePlayer, ConcatenatePlayerSpaces
 from jaxmarl.environments.overcooked import overcooked_layouts
 from jaxmarl.viz.normal_form_visualizer import animate_triangle
 from jaxmarl.viz.overcooked_visualizer import OvercookedVisualizer
-from jaxmarl.wrappers.baselines import LogWrapperCoPolicy
+from jaxmarl.wrappers.baselines import LogWrapper, MPELogWrapper
 
 
 class ActorCritic(nn.Module):
@@ -90,12 +90,9 @@ def unbatchifyp(x: jnp.ndarray, agent_list, env_dim, num_actors):
    
 def make_train(config):
     base_env = jaxmarl.make(config["ENV_NAME"], **config["ENV_KWARGS"])
+    if config.get("CONC_SPACES"):
+        base_env = ConcatenatePlayerSpaces(base_env)
 
-
-    # load_payoffs = jnp.array([
-    #     [2,-1],
-    #     [-1,1]
-    # ])
     if config['COPARAMS_SOURCE'] == 'file':
         filepath = config['COPARAMS_FILE']
         load_params_batch = pickle.load(open(filepath, "rb"))
@@ -160,7 +157,7 @@ def make_train(config):
     def linear_schedule(count):
         frac = 1.0 - (count // (config["NUM_MINIBATCHES"] * config["UPDATE_EPOCHS"])) / config["NUM_UPDATES"]
         return config["LR"] * frac
-
+    
     def train(rng):
             
         co_network = ActorCritic(base_env.action_space(base_env.agents[config["COPLAYER"]]).n, activation=config["ACTIVATION"])
@@ -172,7 +169,11 @@ def make_train(config):
         co_network.init(key_a, init_x)
         
         env = OverridePlayer(base_env, [base_env.agents[config["COPLAYER"]]], co_network)
-        env = LogWrapperCoPolicy(env)
+
+        if "MPE" in config["ENV_NAME"]:
+            env = MPELogWrapper(env)
+        else:
+            env = LogWrapper(env)
 
         # INIT NETWORK
         # now agent 0 is the ego agent since we override the previous agent earlier
@@ -201,6 +202,7 @@ def make_train(config):
         rng, _rng = jax.random.split(rng)
         reset_rng = jax.random.split(_rng, config["NUM_ACTORS"])
         obsv_n, env_state_n = jax.vmap(env.reset, in_axes=(0,))(reset_rng)
+
         
         # TRAIN LOOP
         def _update_step(runner_state, unused):
@@ -294,7 +296,7 @@ def make_train(config):
 
 
             traj_returns = traj_batch.info["returned_episode_returns"].reshape((config["NUM_STEPS"], config["NUM_PARTICLES"], config['NUM_COPOLICIES'], config["NUM_ENVS"]))
-            avg_returns = traj_returns.mean(axis=-1).sum(axis=0) # TODO add in discount to average reward
+            avg_returns = traj_returns.mean(axis=-1).mean(axis=0) # TODO add in discount to average reward
             # std_returns = traj_returns.sum(axis=0).std(axis=-1)
             # std_mean_returns = std_returns / jnp.sqrt(config["NUM_ENVS"])
             # jax.debug.print("mean\n{x}", x=avg_returns)
@@ -338,6 +340,21 @@ def make_train(config):
                 
                 grad_mask_sum = jnp.sum(grad_mask, axis=2, keepdims=True)
                 grad_mask = jnp.where(grad_mask_sum==0, every_max_mask, jnp.divide(grad_mask, grad_mask_sum))
+            
+            elif config['MATCHING'] == "averaged_otherwise_random":
+                max_idxs = jnp.argmax(avg_returns, axis=0)
+                col_idxs = jnp.arange(config["NUM_COPOLICIES"])
+                grad_mask = grad_mask.at[:,max_idxs,col_idxs,:].set(1)
+
+                random_max_mask = jnp.zeros((config["NUM_PARTICLES"], config["NUM_COPOLICIES"]))
+                rng, _rng = jax.random.split(rng)
+                random_idxs = jax.random.randint(_rng, (config["NUM_PARTICLES"],), 0, config["NUM_PARTICLES"])
+                row_idxs = jnp.arange(config["NUM_PARTICLES"])
+                random_max_mask = random_max_mask.at[row_idxs,random_idxs].set(1)
+                random_max_mask = jnp.expand_dims(random_max_mask, axis=(0,3))
+                
+                grad_mask_sum = jnp.sum(grad_mask, axis=2, keepdims=True)
+                grad_mask = jnp.where(grad_mask_sum==0, random_max_mask, jnp.divide(grad_mask, grad_mask_sum))
 
             elif config['MATCHING'] == "normalized_rescale":
                 avg_returns = avg_returns - jnp.min(avg_returns, axis=1, keepdims=True)
@@ -498,13 +515,19 @@ def make_train(config):
                 _update_epoch, update_state, None, config["UPDATE_EPOCHS"]
             )
             train_state = update_state[0]
-            metric = jax.tree_util.tree_map(
-                    lambda x : x.reshape((config["NUM_STEPS"], config["NUM_PARTICLES"], config['NUM_COPOLICIES']*config["NUM_ENVS"]) + x.shape[2:]), traj_batch.info
+            metric = {}
+            returned_episode_returns = jax.tree_util.tree_map(
+                    lambda x : x.reshape((config["NUM_STEPS"], config["NUM_PARTICLES"], config['NUM_COPOLICIES']*config["NUM_ENVS"]) + x.shape[2:]), traj_batch.info["returned_episode_returns"]
                 )
-            metric['grad_mask'] = grad_mask
+            grad_mask = grad_mask.reshape(returned_episode_returns.shape)
+            # metric['grad_mask'] = grad_mask   
+            metric["mean_returns"] = jnp.mean(returned_episode_returns, axis=-1, where=(grad_mask!=0)).mean(axis=0)    
+            returned_episode_returns_reshaped = returned_episode_returns.reshape((config["NUM_STEPS"], config["NUM_PARTICLES"], config['NUM_COPOLICIES'], config["NUM_ENVS"]))
+            particle_by_policy_return = returned_episode_returns_reshaped.mean(axis=-1).mean(axis=0)    
+            metric["max_mean_returns"] = particle_by_policy_return.max(axis=0).mean()
             # metric['avg_returns'] = avg_returns
             # metric['actions'] = traj_batch.action
-            metric['action_probs'] = traj_batch.action_probs
+            # metric['action_probs'] = traj_batch.action_probs
             rng = update_state[-1]
             
             runner_state = (train_state, env_state, last_obs, rng)

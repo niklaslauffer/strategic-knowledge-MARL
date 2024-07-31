@@ -5,6 +5,12 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from typing import Optional
 
+from jaxmarl.environments.mpe.mpe_visualizer import MPEVisualizer
+from jaxmarl.environments.mpe.simple import SimpleMPE
+from jaxmarl.environments.normal_form.normal_form import NormalForm
+from jaxmarl.environments.overcooked.overcooked import Overcooked
+from jaxmarl.viz.overcooked_visualizer import OvercookedVisualizer
+from jaxmarl.viz.normal_form_visualizer import animate_triangle
 from jaxmarl.environments.multi_agent_env import MultiAgentEnv
 from jaxmarl.environments.smax.heuristic_enemy_smax_env import (
     EnemySMAX,
@@ -95,3 +101,18 @@ class SMAXVisualizer(Visualizer):
             frame % self.env.world_steps_per_env_step,
             frame // self.env.world_steps_per_env_step,
         )
+
+
+def viz_wrapper(env, filename, state_seq):
+    if env is SimpleMPE:
+        viz = MPEVisualizer(env, state_seq)
+        viz.animate(save_fname=filename)
+    if env is Overcooked:
+        viz = OvercookedVisualizer()
+        # agent_view_size is hardcoded as it determines the padding around the layout.
+        viz.animate(state_seq, agent_view_size=5, filename=filename)
+    if env is NormalForm:
+        action_seq = state_seq
+        point_colors = ['green', 'red']
+        point_markers = ['o', 'o']
+        animate_triangle(action_seq, point_colors, point_markers, save_gif=filename)

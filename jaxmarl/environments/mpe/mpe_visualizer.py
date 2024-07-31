@@ -44,6 +44,8 @@ class MPEVisualizer(object):
         if view:
             plt.show(block=True)
 
+        return ani
+
     def init_render(self):
         from matplotlib.patches import Circle
         state = self.state_seq[0]

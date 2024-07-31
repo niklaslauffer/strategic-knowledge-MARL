@@ -24,7 +24,7 @@ class Discrete(Space):
 	def __init__(self, num_categories: int, dtype=jnp.int32):
 		assert num_categories >= 0
 		self.n = num_categories
-		self.shape = ()
+		self.shape = (1,)
 		self.dtype = dtype
 
 	def sample(self, rng: chex.PRNGKey) -> chex.Array:

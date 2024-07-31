@@ -20,12 +20,15 @@ class NormalForm(MultiAgentEnv):
         self.action_spaces = {agent: Discrete(payoffs.shape[i]) for i, agent in enumerate(self.agents)}
         self.all_action_space = Discrete(payoffs.shape[0])
 
+        fixed_obs_array = [-1,1]
+        self.fixed_obs = {a: jnp.array([o]) for a,o in zip(self.agents, fixed_obs_array)}
+
         self.observation_spaces = {i: Discrete(0) for i in self.agents}
 
     @partial(jax.jit, static_argnums=[0])
     def reset(self, key: chex.PRNGKey) -> Tuple[chex.Array, Any]:
-        obs = {a: i for i,a in enumerate(self.agents)}
-        state = None
+        obs = self.fixed_obs
+        state = jnp.array([0])
         return obs, state
 
     @partial(jax.jit, static_argnums=[0])
@@ -33,11 +36,10 @@ class NormalForm(MultiAgentEnv):
         # get the actions as array        
 
         actions = tuple(actions[a] for a in self.agents)
-        reward = self.payoffs[actions]
-        print(reward.shape)
-
-        obs = {a: i for i,a in enumerate(self.agents)}
-        state = None
+        noise = jax.random.normal(key) * 0.001
+        reward = self.payoffs[actions] + noise
+        obs = self.fixed_obs
+        state = jnp.array([0])
         rewards = {a: reward for a in self.agents}
         dones = {a: True for a in self.agents + ["__all__"]}
         info = {}

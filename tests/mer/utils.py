@@ -37,7 +37,7 @@ def run_fixed_coparam_setup(rng, payoffs, probs, override_config={}, num_trials=
     config["ENV_KWARGS"]["payoffs"] = payoffs
         
     rng, _rng = jax.random.split(rng, 2)
-    coparams = probs2params(_rng, probs, config)
+    coparams = probs2params(_rng, probs, config, config["COPLAYER"])
 
     config["COPARAMS_SOURCE"] = 'pytree'
     config["COPARAMS_BATCH"] = coparams

@@ -2,6 +2,7 @@
 Based on PureJaxRL Implementation of PPO
 """
 
+import tempfile
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
@@ -11,10 +12,11 @@ from flax.linen.initializers import constant, orthogonal
 from typing import Sequence, NamedTuple, Any
 from flax.training.train_state import TrainState
 import distrax
-from gymnax.wrappers.purerl import LogWrapper, FlattenObservationWrapper
-from jaxmarl.environments.multi_agent_env import DelayedObsWrapper
-import jaxmarl
-from jaxmarl.wrappers.baselines import LogWrapper
+import wandb
+from jaxmarl.viz.visualizer import viz_wrapper
+from jaxmarl.environments.multi_agent_env import DelayedObsWrapper, ConcatenatePlayerSpaces
+import jaxmarl.environments.multi_agent_env
+from jaxmarl.wrappers.baselines import LogWrapper, MPELogWrapper
 from jaxmarl.environments.overcooked import overcooked_layouts
 from jaxmarl.viz.overcooked_visualizer import OvercookedVisualizer
 import hydra
@@ -77,12 +79,16 @@ def make_rollout_pair(config):
     def rollout_pair(rng, params):
 
         env = jaxmarl.make(config["ENV_NAME"], **config["ENV_KWARGS"])
-        env = LogWrapper(env)
+            
+        if "MPE" in config["ENV_NAME"]:
+            env = MPELogWrapper(env)
+        else:
+            env = LogWrapper(env)
 
-        network = ActorCritic(env.action_space().n, activation=config["ACTIVATION"])
+        network = ActorCritic(env.action_space(env.agents[0]).n, activation=config["ACTIVATION"])
         rng, key_r, key_a = jax.random.split(rng, 3)
 
-        init_x = jnp.zeros(env.observation_space().shape)
+        init_x = jnp.zeros(env.observation_space(env.agents[0]).shape)
         init_x = init_x.flatten()
         
         network.init(key_a, init_x)
@@ -166,11 +172,11 @@ def get_rollout(train_state, config):
     # env_params = env.default_params
     # env = LogWrapper(env)
 
-    network = ActorCritic(env.action_space().n, activation=config["ACTIVATION"])
+    network = ActorCritic(env.action_space(env.agents[0]).n, activation=config["ACTIVATION"])
     key = jax.random.PRNGKey(0)
     key, key_r, key_a = jax.random.split(key, 3)
 
-    init_x = jnp.zeros(env.observation_space().shape)
+    init_x = jnp.zeros(env.observation_space(env.agents[0]).shape)
     init_x = init_x.flatten()
 
     network.init(key_a, init_x)
@@ -206,8 +212,13 @@ def get_rollout(train_state, config):
     return state_seq, rew_seq
 
 def batchify(x: dict, agent_list, num_actors):
-    x = jnp.stack([x[a] for a in agent_list])
+    max_dim = max([x[a].shape[-1] for a in agent_list])
+    def pad(z, length):
+        return jnp.concatenate([z, jnp.zeros(z.shape[:-1] + [length - z.shape[-1]])], -1)
+
+    x = jnp.stack([x[a] if x[a].shape[-1] == max_dim else pad(x[a]) for a in agent_list])
     return x.reshape((num_actors, -1))
+
 
 
 def unbatchify(x: jnp.ndarray, agent_list, num_envs, num_actors):
@@ -216,6 +227,9 @@ def unbatchify(x: jnp.ndarray, agent_list, num_envs, num_actors):
 
 def make_train(config):
     env = jaxmarl.make(config["ENV_NAME"], **config["ENV_KWARGS"])
+
+    if config.get("CONC_SPACES"):
+        env = ConcatenatePlayerSpaces(env)
 
     if config.get('OBS_DELAY'):
         env = DelayedObsWrapper(env, delay=config['OBS_DELAY'])
@@ -228,7 +242,10 @@ def make_train(config):
         config["NUM_ACTORS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
     )
     
-    env = LogWrapper(env)
+    if "MPE" in config["ENV_NAME"]:
+        env = MPELogWrapper(env)
+    else:
+        env = LogWrapper(env)
     
     def linear_schedule(count):
         frac = 1.0 - (count // (config["NUM_MINIBATCHES"] * config["UPDATE_EPOCHS"])) / config["NUM_UPDATES"]
@@ -237,9 +254,9 @@ def make_train(config):
     def train(rng):
 
         # INIT NETWORK
-        network = ActorCritic(env.action_space().n, activation=config["ACTIVATION"])
+        network = ActorCritic(env.action_space(env.agents[0]).n, activation=config["ACTIVATION"])
         rng, _rng = jax.random.split(rng)
-        init_x = jnp.zeros(env.observation_space().shape)
+        init_x = jnp.zeros(env.observation_space(env.agents[0]).shape)
         
         init_x = init_x.flatten()
         
@@ -261,7 +278,8 @@ def make_train(config):
         rng, _rng = jax.random.split(rng)
         reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
         obsv, env_state = jax.vmap(env.reset, in_axes=(0,))(reset_rng)
-        
+
+
         # TRAIN LOOP
         def _update_step(runner_state, unused):
             # COLLECT TRAJECTORIES
@@ -288,6 +306,7 @@ def make_train(config):
                     rng_step, env_state, env_act
                 )
                 info = jax.tree_map(lambda x: x.reshape((config["NUM_ACTORS"])), info)
+                # jax.debug.print("{x}", x=info["returned_episode_returns"].mean())
                 transition = Transition(
                     batchify(done, env.agents, config["NUM_ACTORS"]).squeeze(),
                     action,
@@ -418,6 +437,7 @@ def make_train(config):
             )
             train_state = update_state[0]
             metric = traj_batch.info
+            metric = jax.tree_map(lambda x: x.mean(), metric)
             rng = update_state[-1]
             
             runner_state = (train_state, env_state, last_obs, rng)
@@ -432,40 +452,9 @@ def make_train(config):
 
     return train
 
+def plot_crossplays(config, num_rollouts, filename):
 
-
-@hydra.main(version_base=None, config_path="config")
-def main(config):
-    config = OmegaConf.to_container(config) 
-    layout_name = config["ENV_KWARGS"]["layout"]
-    config["ENV_KWARGS"]["layout"] = overcooked_layouts[config["ENV_KWARGS"]["layout"]]
-
-    num_samples = 50
-    rng = jax.random.PRNGKey(30)
-    rng_trains = jax.random.split(rng, num_samples)
-    with jax.disable_jit(False):
-        train_vjit = jax.jit(jax.vmap(make_train(config), out_axes=0))
-        outs = train_vjit(rng_trains)
-
-    if config.get("OBS_DELAY"):
-        filename = f'{config["ENV_NAME"]}_{layout_name}_obsDelay{config["OBS_DELAY"]}_save'
-    else:
-        filename = f'{config["ENV_NAME"]}_{layout_name}_save'
-
-    train_states = outs["runner_state"][0]
-    print(outs["metrics"]["returned_episode_returns"].shape)
-    # for i in range(num_samples):
-
-    pickle.dump(train_states.params, open(f'{filename}_params{num_samples}.pkl', "wb"))
-
-    for i in range(num_samples):
-        plt.plot(outs["metrics"]["returned_episode_returns"][i].mean(-1).reshape(-1))
-    plt.xlabel("Update Step")
-    plt.ylabel("Return")
-    plt.savefig(f'{filename}.png')
-
-    num_rollouts = 100
-
+    num_samples = config["NUM_SEEDS"]
     # take cartesian product of params
     def make_cartesian_and_flatten(array, agent, num_rollouts):
         expanded = np.zeros((num_samples, num_samples, num_rollouts) + array.shape[1:])
@@ -498,14 +487,71 @@ def main(config):
     sns.heatmap(crossplays, ax=axes[0], annot=True, linewidth=0.5, fmt='.1f')
     sns.heatmap(crossvars, ax=axes[1], annot=True, linewidth=0.5, fmt='.1f')
 
-    plt.savefig(f'{filename}_crossplays.png')
+    plt.savefig(f'{filename}_crossplays.png')   
 
+@hydra.main(version_base=None, config_path="config")
+def main(config):
+    config = OmegaConf.to_container(config) 
+    if config["ENV_KWARGS"].get("layout"):
+        layout_name = config["ENV_KWARGS"]["layout"]
+        config["ENV_KWARGS"]["layout"] = overcooked_layouts[layout_name]
+    else:
+        layout_name = ''
 
-    # for robustness: randomize initial states
-    # look through lit for robustness stuff. Anything better than cooperatin w/o human data? If not, do random rollouts idea and zero out gradients so
-    # that you only train after randomness
-    # crossplays should be equal w/o observation delays
+    num_samples = config["NUM_SEEDS"]
+    rng = jax.random.PRNGKey(30)
+    rng_trains = jax.random.split(rng, num_samples)
+    with jax.disable_jit(False):
+        train_vjit = jax.jit(jax.vmap(make_train(config), out_axes=0))
+        outs = train_vjit(rng_trains)
 
+    if config.get("OBS_DELAY"):
+        filename = f'{config["ENV_NAME"]}_{layout_name}_obsDelay{config["OBS_DELAY"]}_save'
+    else:
+        filename = f'{config["ENV_NAME"]}_{layout_name}_save'
+
+    train_states = outs["runner_state"][0]
+
+    pickle.dump(train_states.params, open(f'data/{filename}_params{num_samples}.pkl', "wb"))
+
+    for i in range(num_samples):
+        plt.plot(outs["metrics"]["returned_episode_returns"][i].reshape(-1))
+    plt.xlabel("Update Step")
+    plt.ylabel("Return")
+    plt.savefig(f'{filename}_params{num_samples}.png')
+
+    ### WANDB save
+    mean_returns = outs["metrics"]["returned_episode_returns"]
+
+    wandb.init(
+        entity=config["ENTITY"],
+        project=config["PROJECT"],
+        tags=["MER", "FF"],
+        config=config,
+        mode=config["WANDB_MODE"],
+    )
+
+    num_steps = mean_returns.shape[1]
+    for step in range(num_steps):
+        particle_returns = {f"Particle {i}": mean_returns[i,step] for i in range(config['NUM_PARTICLES'])}
+        particle_returns["Step"] = step
+        wandb.log(particle_returns)
+
+    env = jaxmarl.make(config["ENV_NAME"], **config["ENV_KWARGS"])
+
+    tolog = {}
+    temp_fs = []
+    for i in range(config['NUM_PARTICLES']):
+        state_seq = [jax.tree_map(lambda x : x[j,i], s.state) for j in range(NUM_ROLLOUTS) for s in v_state_obs_seq]
+        temp_f = tempfile.NamedTemporaryFile(suffix='.gif')
+        temp_fs.append(temp_f)
+        viz_wrapper(temp_f.name, env, state_seq)
+        tolog[f"animation_particle{i}"] = wandb.Video(temp_f.name, fps=4, format="gif")
+
+    wandb.log(tolog)
+    [temp.close() for temp in temp_fs]
+
+    ###
 
 if __name__ == "__main__":
     main()

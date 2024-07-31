@@ -1,3 +1,4 @@
+from jaxmarl.environments.multi_agent_env import ConcatenatePlayerSpaces
 from .environments import (
     SimpleMPE,
     SimpleTagMPE,
