@@ -6,6 +6,7 @@ __pycache__/
 *.ipynb
 *.DS_Store
 .vscode/
+.ipynb_checkpoints/
 docker/*
 *.pickle
 *.pkl
@@ -17,3 +18,4 @@ tmp/
 *-checkpoint.py
 wandb/
 outputs/
+models/

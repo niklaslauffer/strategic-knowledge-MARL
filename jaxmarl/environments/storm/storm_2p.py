@@ -797,19 +797,19 @@ class InTheGrid_2p(MultiAgentEnv):
             inner_t = state_nxt.inner_t
             outer_t = state_nxt.outer_t
             reset_inner = inner_t == num_inner_steps
-            done = {i : reset_inner for i in self.agents}
-            done["__all__"] = reset_inner
-            # set for every agent
-
 
             # if inner episode is done, return start state for next game
-            # state_re = _reset_state(key)
-            # state_re = state_re.replace(outer_t=outer_t + 1)
-            # state = jax.tree_map(
-            #     lambda x, y: jax.lax.select(reset_inner, x, y),
-            #     state_re,
-            #     state_nxt,
-            # )
+            state_re = _reset_state(key)
+            state_re = state_re.replace(outer_t=outer_t + 1)
+            state = jax.tree_map(
+                lambda x, y: jax.lax.select(reset_inner, x, y),
+                state_re,
+                state_nxt,
+            )
+            outer_t = state.outer_t
+            reset_outer = outer_t == num_outer_steps
+            done = {}
+            done["__all__"] = reset_outer
 
             obs = _get_obs(state)
             blue_reward = jnp.where(reset_inner, 0, blue_reward)
