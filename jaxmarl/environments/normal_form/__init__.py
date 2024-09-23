@@ -1,1 +1,1 @@
-from .normal_form import NormalForm
+from .normal_form import NormalForm, ExtensiveForm

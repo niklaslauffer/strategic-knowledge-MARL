@@ -23,11 +23,11 @@ from .rendering import (
 )
 
 
-GRID_SIZE = 8
+GRID_SIZE = 5
 OBS_SIZE = 5
 PADDING = OBS_SIZE - 1
 NUM_TYPES = 5  # empty (0), red (1), blue, red coin, blue coin, wall, interact
-NUM_COINS = 6  # per type
+NUM_COINS = 2  # per type
 NUM_COIN_TYPES = 2
 NUM_OBJECTS = (
     2 + NUM_COIN_TYPES * NUM_COINS + 1
@@ -108,22 +108,45 @@ GRID = GRID.at[:, GRID_SIZE + PADDING].set(5)
 
 COIN_SPAWNS = [
     [1, 1],
-    [1, 2],
-    [2, 1],
+    # [1, 2],
+    # [2, 1],
     [1, GRID_SIZE - 2],
-    [2, GRID_SIZE - 2],
-    [1, GRID_SIZE - 3],
+    # [2, GRID_SIZE - 2],
+    # [1, GRID_SIZE - 3],
     # [2, 2],
     # [2, GRID_SIZE - 3],
-    [GRID_SIZE - 2, 2],
-    [GRID_SIZE - 3, 1],
+    # [GRID_SIZE - 2, 2],
+    # [GRID_SIZE - 3, 1],
     [GRID_SIZE - 2, 1],
     [GRID_SIZE - 2, GRID_SIZE - 2],
-    [GRID_SIZE - 2, GRID_SIZE - 3],
-    [GRID_SIZE - 3, GRID_SIZE - 2],
+    # [GRID_SIZE - 2, GRID_SIZE - 3],
+    # [GRID_SIZE - 3, GRID_SIZE - 2],
     # [GRID_SIZE - 3, 2],
     # [GRID_SIZE - 3, GRID_SIZE - 3],
 ]
+
+# COIN_SPAWNS = [
+#     [1, 1],
+#     [1, 2],
+#     [2, 1],
+#     [2, 2],
+# ]
+
+# COIN_SPAWNS = [
+#     [1, 1],
+#     [1, 2],
+#     [1, 3],
+#     [2, 1],
+#     [2, 3],
+#     [3, 1],
+#     [3, 2],
+#     [3, 3],
+# ]
+
+# COIN_SPAWNS = [
+#     [0, 0],
+#     [GRID_SIZE-1, GRID_SIZE-1],
+# ]
 
 COIN_SPAWNS = jnp.array(
     COIN_SPAWNS,
@@ -135,10 +158,21 @@ RED_SPAWN = jnp.array(
     dtype=jnp.int8,
 )
 
+
+# RED_SPAWN = jnp.array(
+#     COIN_SPAWNS,
+#     dtype=jnp.int8,
+# )
+
 BLUE_SPAWN = jnp.array(
     COIN_SPAWNS[1::2, :],
     dtype=jnp.int8,
 )
+
+# BLUE_SPAWN = jnp.array(
+#     COIN_SPAWNS,
+#     dtype=jnp.int8,
+# )
 
 AGENT_SPAWNS = [
     [0, 0],
@@ -201,7 +235,17 @@ class InTheGrid_2p(MultiAgentEnv):
     ):
 
         super().__init__(num_agents=num_agents)
-        self.agents = list(range(num_agents))
+
+        self.cnn = True
+
+        self.agents = ['agent_0', 'agent_1']
+        _shape = (
+            (OBS_SIZE, OBS_SIZE, len(Items) - 1 + 4)
+            if self.cnn
+            else (OBS_SIZE**2 * (len(Items) - 1 + 4),)
+        )
+        obs_space = spaces.Box(low=0,high=NUM_COINS, shape=jnp.prod(jnp.array(_shape)) + NUM_COIN_TYPES + 4,dtype=jnp.uint8,)
+        self.observation_spaces = {a : obs_space for a in self.agents}
 
         def _get_obs_point(x: int, y: int, dir: int) -> jnp.ndarray:
             x, y = x + PADDING, y + PADDING
@@ -307,9 +351,7 @@ class InTheGrid_2p(MultiAgentEnv):
             )
             red_to_show = jnp.where(state.freeze >= 0, state.red_inventory, 0)
 
-            return {
-                "observation": obs1,
-                "inventory": jnp.array(
+            inv1 = jnp.array(
                     [
                         state.red_inventory[0],
                         state.red_inventory[1],
@@ -319,10 +361,8 @@ class InTheGrid_2p(MultiAgentEnv):
                         blue_to_show[1],
                     ],
                     dtype=jnp.int8,
-                ),
-            }, {
-                "observation": _obs2,
-                "inventory": jnp.array(
+                )
+            inv2 = jnp.array(
                     [
                         state.blue_inventory[0],
                         state.blue_inventory[1],
@@ -332,7 +372,11 @@ class InTheGrid_2p(MultiAgentEnv):
                         red_to_show[1],
                     ],
                     dtype=jnp.int8,
-                ),
+                )
+
+            return {
+                'agent_0': jnp.concatenate([obs1.ravel(), inv1.ravel()], dtype=jnp.uint8),
+                'agent_1': jnp.concatenate([_obs2.ravel(), inv2.ravel()], dtype=jnp.uint8), 
             }
 
         def _get_reward(state: State) -> jnp.ndarray:
@@ -579,7 +623,9 @@ class InTheGrid_2p(MultiAgentEnv):
             """Step the environment."""
 
             # freeze check
-            action_0, action_1 = actions
+            action_0 = actions['agent_0']
+            action_1 = actions['agent_1']
+
             action_0 = jnp.where(state.freeze > 0, Actions.stay, action_0)
             action_1 = jnp.where(state.freeze > 0, Actions.stay, action_1)
 
@@ -751,8 +797,10 @@ class InTheGrid_2p(MultiAgentEnv):
             inner_t = state_nxt.inner_t
             outer_t = state_nxt.outer_t
             reset_inner = inner_t == num_inner_steps
-            done = {}
-            done["__all__"] = reset_inner = inner_t == num_inner_steps
+            done = {i : reset_inner for i in self.agents}
+            done["__all__"] = reset_inner
+            # set for every agent
+
 
             # if inner episode is done, return start state for next game
             # state_re = _reset_state(key)
@@ -766,12 +814,13 @@ class InTheGrid_2p(MultiAgentEnv):
             obs = _get_obs(state)
             blue_reward = jnp.where(reset_inner, 0, blue_reward)
             red_reward = jnp.where(reset_inner, 0, red_reward)
+
             return (
                 obs,
-                state,
-                (red_reward, blue_reward),
+                state_nxt,
+                {'agent_0' : red_reward, 'agent_1' : blue_reward},
                 done,
-                {"discount": jnp.zeros((), dtype=jnp.int8)},
+                {},
             )
 
         def _soft_reset_state(key: jnp.ndarray, state: State) -> State:
@@ -901,7 +950,6 @@ class InTheGrid_2p(MultiAgentEnv):
 
         # for debugging
         self.get_obs = _get_obs
-        self.cnn = True
 
         self.num_inner_steps = num_inner_steps
         self.num_outer_steps = num_outer_steps
@@ -921,26 +969,6 @@ class InTheGrid_2p(MultiAgentEnv):
     ) -> spaces.Discrete:
         """Action space of the environment."""
         return spaces.Discrete(len(Actions))
-
-    def observation_space(self) -> spaces.Dict:
-        """Observation space of the environment."""
-        _shape = (
-            (OBS_SIZE, OBS_SIZE, len(Items) - 1 + 4)
-            if self.cnn
-            else (OBS_SIZE**2 * (len(Items) - 1 + 4),)
-        )
-
-        return {
-            "observation": spaces.Box(
-                low=0, high=1, shape=_shape, dtype=jnp.uint8
-            ),
-            "inventory": spaces.Box(
-                low=0,
-                high=NUM_COINS,
-                shape=NUM_COIN_TYPES + 4,
-                dtype=jnp.uint8,
-            ),
-        }
 
     def state_space(self) -> spaces.Dict:
         """State space of the environment."""
@@ -1325,7 +1353,7 @@ class InTheGrid_2p(MultiAgentEnv):
             ymax = (j + 1) * tile_height
             xmin = i * tile_width
             xmax = (i + 1) * tile_width
-            img[ymin:ymax, xmin:xmax, :] = onp.int8(255)
+            img[ymin:ymax, xmin:xmax, :] = onp.int8(127)
         tile_width = width_px // (self.num_outer_steps)
         j = 1
         for i in range(0, outer_t):
@@ -1333,5 +1361,5 @@ class InTheGrid_2p(MultiAgentEnv):
             ymax = (j + 1) * tile_height
             xmin = i * tile_width
             xmax = (i + 1) * tile_width
-            img[ymin:ymax, xmin:xmax, :] = onp.int8(255)
+            img[ymin:ymax, xmin:xmax, :] = onp.int8(127)
         return img

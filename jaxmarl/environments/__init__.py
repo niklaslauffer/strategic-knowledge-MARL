@@ -21,5 +21,5 @@ from .mabrax import Ant, Humanoid, Hopper, Walker2d, HalfCheetah
 from .hanabi import HanabiGame
 from .storm import InTheGrid, InTheGrid_2p
 from .coin_game import CoinGame
-from .normal_form import NormalForm
+from .normal_form import NormalForm, ExtensiveForm
 

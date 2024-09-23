@@ -312,9 +312,20 @@ class InTheGrid(MultiAgentEnv):
                 return agent_to_show
             vmap_agent2show = jax.vmap(agent2show, (0, 0), (0))
             agents2show = vmap_agent2show(state.agent_inventories, state.agent_freezes)
-            return {
-                "observations": obs,
-                "inventory": jnp.array(
+            # return {
+            #     "observations": obs,
+            #     "inventory": jnp.array(
+            #         [
+            #             state.agent_inventories[:, 0],
+            #             state.agent_inventories[:, 1],
+            #             pickups,
+            #             agents2show[:, 0],
+            #             agents2show[:, 1],
+            #         ],
+            #         dtype=jnp.int8,
+            #     ),
+            # }
+            inv = jnp.array(
                     [
                         state.agent_inventories[:, 0],
                         state.agent_inventories[:, 1],
@@ -323,8 +334,9 @@ class InTheGrid(MultiAgentEnv):
                         agents2show[:, 1],
                     ],
                     dtype=jnp.int8,
-                ),
-            }
+                )
+            return jnp.concatenate([obs.ravel(), inv.ravel()], dtype=jnp.uint8)
+                
 
         def _get_reward(state, pair) -> jnp.ndarray:
             inv1 = state.agent_inventories[pair[0]] / state.agent_inventories[pair[0]].sum()
@@ -904,7 +916,7 @@ class InTheGrid(MultiAgentEnv):
 
             return (
                 obs,
-                state,
+                state_nxt,
                 rewards,
                 done,
                 {"discount": jnp.zeros((), dtype=jnp.int8)},
@@ -1010,12 +1022,15 @@ class InTheGrid(MultiAgentEnv):
             if self.cnn
             else (OBS_SIZE**2 * (len(Items) - 1 + 4),)
         )
+        # self.observation_spaces = {
+        #     i: {"observation": spaces.Box(
+        #         low=0, high=1, shape=_shape, dtype=jnp.uint8),
+        #     "inventory": spaces.Box(
+        #         low=0,high=NUM_COINS,shape=NUM_COIN_TYPES + 4,dtype=jnp.uint8,),
+        # } for i in range(self.num_agents)}
         self.observation_spaces = {
-            i: {"observation": spaces.Box(
-                low=0, high=1, shape=_shape, dtype=jnp.uint8),
-            "inventory": spaces.Box(
-                low=0,high=NUM_COINS,shape=NUM_COIN_TYPES + 4,dtype=jnp.uint8,),
-        } for i in range(self.num_agents)}
+            i: spaces.Box(low=0,high=NUM_COINS,shape=jnp.prod(jnp.array(_shape)) + NUM_COIN_TYPES + 4,dtype=jnp.uint8,)
+            for i in range(self.num_agents)}
         self.action_spaces = {
             i: spaces.Discrete(len(Actions)) for i in range(self.num_agents)
         }
