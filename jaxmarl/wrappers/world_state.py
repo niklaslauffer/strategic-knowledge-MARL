@@ -1,11 +1,14 @@
+import jax
 from jaxmarl.environments.multi_agent_env import MultiAgentEnv
 import jax.numpy as jnp
 
 
 def make_world_state_wrapper(env_name: str, env: MultiAgentEnv):
-    if env_name == "normal_form" or env_name == "extensive_form":
+    if env_name == "normal_form":
         return NormalWorldStateWrapper(env)
-    if env_name == "storm_2p":
+    if env_name == "extensive_form":
+        return ExtensiveWorldStateWrapper(env)
+    if env_name == "storm_2p" or env_name == "storm_2p_simple":
         return ConcObsWorldStateWrapper(env)
     if env_name == "overcooked":
         return StateWorldStateWrapper(env)
@@ -15,6 +18,19 @@ def make_world_state_wrapper(env_name: str, env: MultiAgentEnv):
         raise ValueError(f"Unknown world state wrapper: {env_name}")
 
 class NormalWorldStateWrapper():
+    def __init__(self, env: MultiAgentEnv):
+        self.env = env
+
+    def __getattr__(self, name: str):
+        return getattr(self.env, name)
+
+    def get_state_features(self, state, obs):
+        return state.env_state
+    
+    def state_feature_size(self):
+        return 1
+    
+class ExtensiveWorldStateWrapper():
     def __init__(self, env: MultiAgentEnv):
         self.env = env
 
