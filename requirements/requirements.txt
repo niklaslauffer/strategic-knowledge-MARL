@@ -1,5 +1,5 @@
 # requirements are alligned with nvcr.io/nvidia/jax:23.10-py3 image
-jax>=0.4.16.0,<=0.4.30
+jax[cuda12]==0.4.30
 jaxlib>=0.4.16.0,<=0.4.30
 flax==0.8.5
 chex==0.1.84
